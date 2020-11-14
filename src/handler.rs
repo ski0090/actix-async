@@ -64,33 +64,33 @@ where
     M: Message,
 {
     async fn handle(&mut self, act: &A, ctx: &Context<A>) {
-        let msg = self.msg.take().unwrap();
-
-        match self.tx.take() {
-            Some(tx) => {
-                if !tx.is_closed() {
-                    let res = act.handle(msg, ctx).await;
-                    let _ = tx.send(res);
+        if let Some(msg) = self.msg.take() {
+            match self.tx.take() {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = act.handle(msg, ctx).await;
+                        let _ = tx.send(res);
+                    }
                 }
-            }
-            None => {
-                let _ = act.handle(msg, ctx).await;
+                None => {
+                    let _ = act.handle(msg, ctx).await;
+                }
             }
         }
     }
 
     async fn handle_wait(&mut self, act: &mut A, ctx: &mut Context<A>) {
-        let msg = self.msg.take().unwrap();
-
-        match self.tx.take() {
-            Some(tx) => {
-                if !tx.is_closed() {
-                    let res = act.handle_wait(msg, ctx).await;
-                    let _ = tx.send(res);
+        if let Some(msg) = self.msg.take() {
+            match self.tx.take() {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = act.handle_wait(msg, ctx).await;
+                        let _ = tx.send(res);
+                    }
                 }
-            }
-            None => {
-                let _ = act.handle_wait(msg, ctx).await;
+                None => {
+                    let _ = act.handle_wait(msg, ctx).await;
+                }
             }
         }
     }

@@ -14,7 +14,6 @@ use crate::handler::Handler;
 use crate::message::{
     message_send_check, ActorMessage, FunctionMessage, FunctionMutMessage, Message, MessageObject,
 };
-use crate::runtime::RuntimeService;
 
 pub struct Addr<A: Actor>(Arc<Sender<ActorMessage<A>>>);
 
@@ -173,7 +172,7 @@ impl<A: Actor> Addr<A> {
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + 'static,
     {
         let this = self.clone();
-        A::Runtime::spawn(async move {
+        A::spawn(async move {
             message_send_check::<M>();
             let msg = MessageObject::new(msg, None);
             let _ = this.deref().send(f(msg)).await;

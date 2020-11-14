@@ -1,3 +1,6 @@
+use core::future::Future;
+use core::time::Duration;
+
 use actix_rt::Arbiter;
 use async_trait::async_trait;
 use tokio::sync::mpsc::{channel, Receiver};
@@ -12,6 +15,14 @@ pub(crate) const CHANNEL_CAP: usize = 256;
 #[async_trait(?Send)]
 pub trait Actor: Sized + 'static {
     type Runtime: RuntimeService;
+
+    // async hook before actor start to run.
+    #[allow(unused_variables)]
+    async fn on_start(&mut self, ctx: &mut Context<Self>) {}
+
+    // async hook before actor stops
+    #[allow(unused_variables)]
+    async fn on_stop(&mut self, ctx: &mut Context<Self>) {}
 
     // start the actor and return it's address
     fn start(self) -> Addr<Self> {
@@ -50,25 +61,25 @@ pub trait Actor: Sized + 'static {
         tx
     }
 
-    // async hook before actor start to run.
-    #[allow(unused_variables)]
-    async fn on_start(&mut self, ctx: &mut Context<Self>) {}
+    fn spawn<F: Future<Output = ()> + 'static>(f: F) {
+        Self::Runtime::spawn(f)
+    }
 
-    // async hook before actor stops
-    #[allow(unused_variables)]
-    async fn on_stop(&mut self, ctx: &mut Context<Self>) {}
+    fn sleep(dur: Duration) -> <Self::Runtime as RuntimeService>::Sleep {
+        Self::Runtime::sleep(dur)
+    }
 
     fn _start<F>(tx: WeakAddr<Self>, rx: Receiver<ActorMessage<Self>>, f: F)
     where
         F: FnOnce(&mut Context<Self>) -> Self,
     {
-        let mut ctx = Context::new(tx);
+        let mut ctx = Context::new(tx, rx);
 
         let actor = f(&mut ctx);
 
-        let mut ctx = ContextWithActor::new(actor, rx, ctx);
+        let mut ctx = ContextWithActor::new(actor, ctx);
 
-        Self::Runtime::spawn(async move {
+        Self::spawn(async move {
             let _ = ctx.first_run().await;
         });
     }
