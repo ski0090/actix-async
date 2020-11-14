@@ -3,13 +3,15 @@ block.
 
 ### Example:
 ```rust
-use actix_async::prelude::{Actor, Context, Handler, Message};
+use actix_async::prelude::*;
 
 // actor type
 struct TestActor;
 
 // impl actor trait for actor type
-impl Actor for TestActor {}
+impl Actor for TestActor {
+    type Runtime = ActixRuntime;
+}
 
 // message type
 struct TestMessage;

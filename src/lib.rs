@@ -3,13 +3,15 @@
 //!
 //! # Example:
 //! ```rust
-//! use actix_async::prelude::{Actor, Context, Handler, Message};
+//! use actix_async::prelude::*;
 //!
 //! // actor type
 //! struct TestActor;
 //!
 //! // impl actor trait for actor type
-//! impl Actor for TestActor {}
+//! impl Actor for TestActor {
+//!     type Runtime = ActixRuntime;
+//! }
 //!
 //! // message type
 //! struct TestMessage;
@@ -56,21 +58,23 @@
 //! ```
 
 mod actor;
-pub mod context;
 mod handler;
 mod message;
 
 pub mod address;
+pub mod context;
 pub mod prelude {
     pub use crate::actor::Actor;
     pub use crate::context::Context;
     pub use crate::handler::Handler;
     pub use crate::message::Message;
+    pub use crate::runtime::{ActixRuntime, RuntimeService};
 }
+pub mod runtime;
 
 #[cfg(test)]
 mod test {
-    use core::sync::atomic::Ordering;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use core::time::Duration;
 
     use std::sync::Arc;
@@ -80,10 +84,10 @@ mod test {
 
     use super::actor::Actor;
     use super::context::Context;
-    use super::context::IntervalJoinHandle;
+    use super::context::ContextJoinHandle;
     use super::handler::Handler;
     use super::message::Message;
-    use std::sync::atomic::AtomicUsize;
+    use super::runtime::ActixRuntime;
 
     #[actix_rt::test]
     async fn start_in_arbiter() {
@@ -126,19 +130,21 @@ mod test {
         let addr = actor.start();
 
         let (size, handle) = addr.send(TestIntervalMessage).await.unwrap();
-        actix_rt::time::sleep(Duration::from_secs(2)).await;
+        actix_rt::time::sleep(Duration::from_millis(1600)).await;
         handle.cancel();
-        assert_eq!(size.load(Ordering::SeqCst), 4);
+        assert_eq!(size.load(Ordering::SeqCst), 3);
 
         let (size, handle) = addr.wait(TestIntervalMessage).await.unwrap();
-        actix_rt::time::sleep(Duration::from_secs(2)).await;
+        actix_rt::time::sleep(Duration::from_millis(1600)).await;
         handle.cancel();
-        assert_eq!(size.load(Ordering::SeqCst), 4)
+        assert_eq!(size.load(Ordering::SeqCst), 3)
     }
 
     struct TestActor;
 
-    impl Actor for TestActor {}
+    impl Actor for TestActor {
+        type Runtime = ActixRuntime;
+    }
 
     struct TestMessage;
 
@@ -160,7 +166,7 @@ mod test {
     struct TestIntervalMessage;
 
     impl Message for TestIntervalMessage {
-        type Result = (Arc<AtomicUsize>, IntervalJoinHandle);
+        type Result = (Arc<AtomicUsize>, ContextJoinHandle);
     }
 
     #[async_trait(?Send)]
@@ -169,7 +175,7 @@ mod test {
             &self,
             _: TestIntervalMessage,
             ctx: &Context<Self>,
-        ) -> (Arc<AtomicUsize>, IntervalJoinHandle) {
+        ) -> (Arc<AtomicUsize>, ContextJoinHandle) {
             let size = Arc::new(AtomicUsize::new(0));
             let handle = ctx.run_interval(Duration::from_millis(500), {
                 let size = size.clone();
@@ -187,7 +193,7 @@ mod test {
             &mut self,
             _: TestIntervalMessage,
             ctx: &mut Context<Self>,
-        ) -> (Arc<AtomicUsize>, IntervalJoinHandle) {
+        ) -> (Arc<AtomicUsize>, ContextJoinHandle) {
             let size = Arc::new(AtomicUsize::new(0));
             let handle = ctx.run_wait_interval(Duration::from_millis(500), {
                 let size = size.clone();

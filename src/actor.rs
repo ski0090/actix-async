@@ -5,11 +5,14 @@ use tokio::sync::mpsc::{channel, Receiver};
 use crate::address::{Addr, WeakAddr};
 use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
+use crate::runtime::RuntimeService;
 
 pub(crate) const CHANNEL_CAP: usize = 256;
 
 #[async_trait(?Send)]
 pub trait Actor: Sized + 'static {
+    type Runtime: RuntimeService;
+
     // start the actor and return it's address
     fn start(self) -> Addr<Self> {
         Self::create(|_| self)
@@ -65,7 +68,7 @@ pub trait Actor: Sized + 'static {
 
         let mut ctx = ContextWithActor::new(actor, rx, ctx);
 
-        actix_rt::spawn(async move {
+        Self::Runtime::spawn(async move {
             let _ = ctx.first_run().await;
         });
     }

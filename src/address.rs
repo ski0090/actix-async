@@ -1,7 +1,6 @@
 use core::future::Future;
 use core::ops::Deref;
 use core::pin::Pin;
-use core::time::Duration;
 
 use std::sync::{Arc, Weak};
 
@@ -15,6 +14,7 @@ use crate::handler::Handler;
 use crate::message::{
     message_send_check, ActorMessage, FunctionMessage, FunctionMutMessage, Message, MessageObject,
 };
+use crate::runtime::RuntimeService;
 
 pub struct Addr<A: Actor>(Arc<Sender<ActorMessage<A>>>);
 
@@ -161,10 +161,7 @@ impl<A: Actor> Addr<A> {
         message_send_check::<M>();
         let msg = MessageObject::new(msg, Some(tx));
 
-        self.deref()
-            .send_timeout(f(msg), Duration::from_secs(10))
-            .await
-            .map_err(|_| ())?;
+        self.deref().send(f(msg)).await.map_err(|_| ())?;
 
         rx.await.map_err(|_| ())
     }
@@ -176,7 +173,7 @@ impl<A: Actor> Addr<A> {
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + 'static,
     {
         let this = self.clone();
-        actix_rt::spawn(async move {
+        A::Runtime::spawn(async move {
             message_send_check::<M>();
             let msg = MessageObject::new(msg, None);
             let _ = this.deref().send(f(msg)).await;

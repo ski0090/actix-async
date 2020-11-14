@@ -6,7 +6,7 @@ use core::time::Duration;
 
 use std::collections::VecDeque;
 
-use futures_util::StreamExt;
+use futures_util::stream::{Stream, StreamExt};
 use slab::Slab;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
@@ -14,9 +14,11 @@ use tokio::sync::oneshot;
 
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
 use crate::address::{Addr, WeakAddr};
+use crate::handler::Handler;
 use crate::message::{
-    ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, MessageObject,
+    ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
+use crate::runtime::RuntimeService;
 
 pub struct Context<A: Actor> {
     state: Cell<ActorState>,
@@ -26,11 +28,13 @@ pub struct Context<A: Actor> {
     tx: WeakAddr<A>,
 }
 
-pub struct IntervalJoinHandle {
+/// a join handle can be used to cancel a spawned async task like interval closure and stream
+/// handler
+pub struct ContextJoinHandle {
     handle: oneshot::Sender<()>,
 }
 
-impl IntervalJoinHandle {
+impl ContextJoinHandle {
     pub fn cancel(self) {
         let _ = self.handle.send(());
     }
@@ -47,7 +51,8 @@ impl<A: Actor> Context<A> {
         }
     }
 
-    pub fn run_interval<F>(&self, dur: Duration, f: F) -> IntervalJoinHandle
+    /// run interval concurrent closure on context. `Handler::handle` will be called.
+    pub fn run_interval<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
         F: for<'a> FnOnce(&'a A, &'a Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
             + Clone
@@ -58,7 +63,9 @@ impl<A: Actor> Context<A> {
         self.interval(dur, msg)
     }
 
-    pub fn run_wait_interval<F>(&self, dur: Duration, f: F) -> IntervalJoinHandle
+    /// run interval exclusive closure on context. `Handler::handle_wait` will be called.
+    /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
+    pub fn run_wait_interval<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
         F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
             + Clone
@@ -69,6 +76,7 @@ impl<A: Actor> Context<A> {
         self.interval(dur, msg)
     }
 
+    /// run concurrent closure on context after given duration. `Handler::handle` will be called.
     pub fn run_later<F>(&self, dur: Duration, f: F)
     where
         F: for<'a> FnOnce(&'a A, &'a Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
@@ -79,6 +87,9 @@ impl<A: Actor> Context<A> {
         self.later(dur, ActorMessage::Ref(msg));
     }
 
+    /// run exclusive closure on context after given duration. `Handler::handle_wait` will be
+    /// called.
+    /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
     pub fn run_wait_later<F>(&self, dur: Duration, f: F)
     where
         F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
@@ -89,51 +100,150 @@ impl<A: Actor> Context<A> {
         self.later(dur, ActorMessage::Mut(msg));
     }
 
+    /// stop the context. It would end the actor gracefully by draining all remaining message in
+    /// queue.
+    ///
+    /// *. It DOES NOT drain the channel.
     pub fn stop(&self) {
         self.state.set(ActorState::StopGraceful);
     }
 
+    /// get the address of actor from context.
     pub fn address(&self) -> Option<Addr<A>> {
         self.tx.upgrade()
     }
 
-    fn interval(&self, dur: Duration, msg: IntervalMessage<A>) -> IntervalJoinHandle {
+    /// add a stream to context. multiple stream can be added to one context.
+    ///
+    /// stream item will be treated as concurrent message and `Handler::handle` will be called.
+    /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
+    /// # example:
+    /// ```rust
+    /// use actix_async::prelude::*;
+    /// use futures_util::stream::once;
+    ///
+    /// struct StreamActor;
+    ///
+    /// impl Actor for StreamActor {
+    ///     type Runtime = ActixRuntime;
+    /// }
+    ///
+    /// struct StreamMessage;
+    ///
+    /// impl Message for StreamMessage {
+    ///     type Result = ();
+    /// }
+    ///
+    /// #[async_trait::async_trait(?Send)]
+    /// impl Handler<StreamMessage> for StreamActor {
+    ///     async fn handle(&self, _: StreamMessage, _: &Context<Self>) {}
+    /// }
+    ///
+    /// #[actix_rt::main]
+    /// async fn main() {
+    ///     let address = StreamActor::create(|ctx| {
+    ///         ctx.add_stream(once(async { StreamMessage }));
+    ///         StreamActor
+    ///     });
+    /// }
+    /// ```
+    pub fn add_stream<S, M>(&self, stream: S) -> ContextJoinHandle
+    where
+        S: Stream<Item = M> + 'static,
+        M: Message + 'static,
+        A: Handler<M>,
+    {
+        self.stream(stream, ActorMessage::Ref)
+    }
+
+    /// add a stream to context. multiple stream can be added to one context.
+    ///
+    /// stream item will be treated as exclusve message and `Handler::handle_wait` will be called.
+    pub fn add_wait_stream<S, M>(&self, stream: S) -> ContextJoinHandle
+    where
+        S: Stream<Item = M> + 'static,
+        M: Message + 'static,
+        A: Handler<M>,
+    {
+        self.stream(stream, ActorMessage::Mut)
+    }
+
+    fn stream<S, M, F>(&self, stream: S, f: F) -> ContextJoinHandle
+    where
+        S: Stream<Item = M> + 'static,
+        M: Message + 'static,
+        A: Handler<M>,
+        F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy + 'static,
+    {
+        let tx = self.tx.clone();
+        let (tx2, mut rx2) = oneshot::channel();
+
+        A::Runtime::spawn(async move {
+            tokio::pin!(stream);
+            loop {
+                tokio::select! {
+                    rx2 = (&mut rx2) => {
+                        if rx2.is_ok() {
+                            return;
+                        }
+                    }
+                    item = stream.next() => {
+                        if let Some(msg) = item {
+                            if let Some(tx) = tx.upgrade() {
+                                let msg = MessageObject::new(msg, None);
+                                if tx.deref().send(f(msg)).await.is_ok() {
+                                    continue;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+
+        ContextJoinHandle { handle: tx2 }
+    }
+
+    fn interval(&self, dur: Duration, msg: IntervalMessage<A>) -> ContextJoinHandle {
         let token = self.interval_queue.borrow_mut().insert(msg);
 
         let tx = self.tx.clone();
         let (tx2, mut rx2) = oneshot::channel();
 
-        actix_rt::spawn(async move {
-            let mut interval = actix_rt::time::interval(dur);
+        A::Runtime::spawn(async move {
+            let mut sleep = A::Runtime::sleep(dur);
             loop {
                 tokio::select! {
                     rx2 = (&mut rx2) => {
-                        if let Ok(()) = rx2 {
+                        if rx2.is_ok() {
                             if let Some(tx) = tx.upgrade() {
                                 let _ = tx.deref().send(ActorMessage::IntervalTokenCancel(token)).await;
                             }
                             return;
                         }
                     }
-                    _ = interval.next() => {
-                        if let Some(tx) = tx.upgrade() {
-                            if tx.deref().send(ActorMessage::IntervalToken(token)).await.is_err() {
-                                return;
-                            }
+                    _ = (&mut sleep) => {
+                        match tx.upgrade() {
+                            Some(tx) if tx.deref().send(ActorMessage::IntervalToken(token)).await.is_ok() => {
+                                sleep = A::Runtime::sleep(dur);
+                                continue;
+                            },
+                            _ => return
                         }
                     }
                 }
             }
         });
 
-        IntervalJoinHandle { handle: tx2 }
+        ContextJoinHandle { handle: tx2 }
     }
 
     fn later(&self, dur: Duration, msg: ActorMessage<A>) {
         let token = self.delay_queue.borrow_mut().insert(msg);
         let tx = self.tx.clone();
-        actix_rt::spawn(async move {
-            actix_rt::time::sleep(dur).await;
+        A::Runtime::spawn(async move {
+            A::Runtime::sleep(dur).await;
             if let Some(tx) = tx.upgrade() {
                 let _ = tx.deref().send(ActorMessage::DelayToken(token)).await;
             }
@@ -219,7 +329,7 @@ impl<A: Actor> Drop for ContextWithActor<A> {
             // some of the cached message object may finished already. remove them.
             ctx.cache_ref.retain(|m| !m.is_finished());
 
-            actix_rt::spawn(async move {
+            A::Runtime::spawn(async move {
                 let _ = ctx.run().await;
             });
         } else if let Some(tx) = self.drop_notify.take() {
