@@ -100,10 +100,7 @@ where
     }
 }
 
-pub struct MessageObject<A> {
-    obj: Box<dyn MessageHandler<A>>,
-    finished: bool,
-}
+pub struct MessageObject<A>(Box<dyn MessageHandler<A>>);
 
 /*
     SAFETY:
@@ -124,18 +121,7 @@ impl<A> MessageObject<A> {
         A: Actor + Handler<M>,
         M: Message,
     {
-        MessageObject {
-            obj: Box::new(MessageHandlerContainer { msg: Some(msg), tx }),
-            finished: false,
-        }
-    }
-
-    pub(crate) fn set_finished(&mut self) {
-        self.finished = true;
-    }
-
-    pub(crate) fn is_finished(&self) -> bool {
-        self.finished
+        MessageObject(Box::new(MessageHandlerContainer { msg: Some(msg), tx }))
     }
 }
 
@@ -143,13 +129,13 @@ impl<A> Deref for MessageObject<A> {
     type Target = Box<dyn MessageHandler<A>>;
 
     fn deref(&self) -> &Self::Target {
-        &self.obj
+        &self.0
     }
 }
 
 impl<A> DerefMut for MessageObject<A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.obj
+        &mut self.0
     }
 }
 

@@ -1,5 +1,4 @@
-[actix](https://crates.io/crates/actix) API(mostly) with async/await friendly. Actor state can be accessed directly in async
-block.
+[actix](https://crates.io/crates/actix) API(mostly) with async/await friendly.
 
 ### Example:
 ```rust

@@ -16,20 +16,20 @@ pub(crate) const CHANNEL_CAP: usize = 256;
 pub trait Actor: Sized + 'static {
     type Runtime: RuntimeService;
 
-    // async hook before actor start to run.
+    /// async hook before actor start to run.
     #[allow(unused_variables)]
     async fn on_start(&mut self, ctx: &mut Context<Self>) {}
 
-    // async hook before actor stops
+    /// async hook before actor stops
     #[allow(unused_variables)]
     async fn on_stop(&mut self, ctx: &mut Context<Self>) {}
 
-    // start the actor and return it's address
+    /// start the actor on current thread and return it's address
     fn start(self) -> Addr<Self> {
         Self::create(|_| self)
     }
 
-    // create actor with closure
+    /// create actor with closure
     fn create<F>(f: F) -> Addr<Self>
     where
         F: FnOnce(&mut Context<Self>) -> Self,
@@ -44,7 +44,7 @@ pub trait Actor: Sized + 'static {
         tx
     }
 
-    // create actor with closure and start it in the given arbiter
+    /// create actor with closure and start it in the given arbiter
     fn start_in_arbiter<F>(arb: &Arbiter, f: F) -> Addr<Self>
     where
         F: FnOnce(&mut Context<Self>) -> Self + Send + 'static,

@@ -1,7 +1,5 @@
 use core::cell::{Cell, RefCell};
-use core::future::Future;
 use core::ops::Deref;
-use core::pin::Pin;
 use core::time::Duration;
 
 use std::collections::VecDeque;
@@ -18,8 +16,9 @@ use crate::handler::Handler;
 use crate::message::{
     ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
+use crate::types::LocalBoxedFuture;
 
-pub struct Context<A: Actor> {
+pub struct Context<A> {
     state: Cell<ActorState>,
     queue: VecDeque<ActorMessage<A>>,
     interval_queue: RefCell<Slab<IntervalMessage<A>>>,
@@ -55,9 +54,7 @@ impl<A: Actor> Context<A> {
     /// run interval concurrent closure on context. `Handler::handle` will be called.
     pub fn run_interval<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
-        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + Clone
-            + 'static,
+        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxedFuture<'a, ()> + Clone + 'static,
     {
         let msg = FunctionMessage::<F, ()>::new(f);
         let msg = IntervalMessage::Ref(Box::new(msg));
@@ -68,7 +65,7 @@ impl<A: Actor> Context<A> {
     /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
     pub fn run_wait_interval<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
-        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxedFuture<'a, ()>
             + Clone
             + 'static,
     {
@@ -80,8 +77,7 @@ impl<A: Actor> Context<A> {
     /// run concurrent closure on context after given duration. `Handler::handle` will be called.
     pub fn run_later<F>(&self, dur: Duration, f: F)
     where
-        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + 'static,
+        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxedFuture<'a, ()> + 'static,
     {
         let msg = FunctionMessage::new(f);
         let msg = MessageObject::new(msg, None);
@@ -93,8 +89,7 @@ impl<A: Actor> Context<A> {
     /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
     pub fn run_wait_later<F>(&self, dur: Duration, f: F)
     where
-        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + 'static,
+        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxedFuture<'a, ()> + 'static,
     {
         let msg = FunctionMutMessage::new(f);
         let msg = MessageObject::new(msg, None);
@@ -252,39 +247,32 @@ impl<A: Actor> Context<A> {
         })
     }
 
-    // return true to notify the outer loop to continue
+    // return optional actor state to notify context loop
     fn add_message(
         &mut self,
         msg: ActorMessage<A>,
         drop_notify: &mut Option<oneshot::Sender<()>>,
-    ) -> bool {
+    ) -> Option<ActorState> {
         match msg {
             ActorMessage::ActorState(state, notify) => {
-                let should_continue =
-                    state == ActorState::Stop || state == ActorState::StopGraceful;
-
-                if should_continue {
+                if state == ActorState::Stop || state == ActorState::StopGraceful {
                     self.rx.get_mut().close();
                 }
 
                 self.state.set(state);
                 *drop_notify = notify;
-                return should_continue;
+                Some(state)
             }
-            _ => self.queue.push_back(msg),
+            _ => {
+                self.queue.push_back(msg);
+                None
+            }
         }
-        false
     }
 
     async fn handle_concurrent(&self, actor: &A, cache_ref: &mut Vec<MessageObject<A>>) {
         if !cache_ref.is_empty() {
-            let map = cache_ref.iter_mut().map(|m| {
-                async move {
-                    m.handle(actor, self).await;
-                    // set message object to finish state.
-                    m.set_finished();
-                }
-            });
+            let map = cache_ref.iter_mut().map(|m| m.handle(actor, self));
             let _ = futures_util::future::join_all(map).await;
 
             // clear the cache as they are all finished.
@@ -293,8 +281,10 @@ impl<A: Actor> Context<A> {
     }
 
     fn handle_delay(&mut self, token: usize) {
-        let msg = self.delay_queue.borrow_mut().remove(token);
-        self.queue.push_front(msg);
+        if self.delay_queue.borrow().contains(token) {
+            let msg = self.delay_queue.borrow_mut().remove(token);
+            self.queue.push_front(msg);
+        }
     }
 
     fn handle_interval(&mut self, token: usize) {
@@ -304,7 +294,9 @@ impl<A: Actor> Context<A> {
     }
 
     fn handle_interval_cancel(&self, token: usize) {
-        self.interval_queue.borrow_mut().remove(token);
+        if self.interval_queue.borrow().contains(token) {
+            self.interval_queue.borrow_mut().remove(token);
+        }
     }
 
     async fn handle_message_queue(
@@ -342,17 +334,6 @@ impl<A: Actor> Context<A> {
             }
         }
     }
-
-    async fn recv_one(&mut self, drop_notify: &mut Option<oneshot::Sender<()>>) {
-        if self.queue.is_empty() {
-            match self.rx.get_mut().recv().await {
-                Some(msg) => {
-                    self.add_message(msg, drop_notify);
-                }
-                None => self.stop(),
-            }
-        }
-    }
 }
 
 pub(crate) struct ContextWithActor<A: Actor> {
@@ -377,11 +358,12 @@ impl<A: Actor> Default for ContextWithActor<A> {
 
 impl<A: Actor> Drop for ContextWithActor<A> {
     fn drop(&mut self) {
+        // recovery from thread panic.
         if std::thread::panicking() && self.ctx.as_ref().unwrap().state.get() == ActorState::Running
         {
             let mut ctx = std::mem::take(self);
-            // some of the cached message object may finished already. remove them.
-            ctx.cache_ref.retain(|m| !m.is_finished());
+            // some of the cached message object may finished gone. remove them.
+            ctx.cache_ref.retain(|m| !m.finished());
 
             A::spawn(async move {
                 let _ = ctx.run().await;
@@ -428,11 +410,6 @@ impl<A: Actor> ContextWithActor<A> {
         }
 
         'ctx: loop {
-            // force stop
-            if ctx.state.get() == ActorState::Stop {
-                break 'ctx;
-            }
-
             // drain queue.
             ctx.handle_message_queue(actor, cache_mut, cache_ref).await;
 
@@ -440,12 +417,11 @@ impl<A: Actor> ContextWithActor<A> {
             if ctx.state.get() == ActorState::StopGraceful {
                 'drain: loop {
                     match ctx.rx.get_mut().recv().await {
-                        Some(msg) => {
-                            if ctx.add_message(msg, drop_notify) {
-                                // additional stop message received. ignore all messages come after.
-                                break 'drain;
-                            }
-                        }
+                        Some(msg) => match ctx.add_message(msg, drop_notify) {
+                            Some(ActorState::Stop) => break 'ctx,
+                            Some(ActorState::StopGraceful) => break 'drain,
+                            _ => continue 'drain,
+                        },
                         None => break 'drain,
                     }
                 }
@@ -457,14 +433,14 @@ impl<A: Actor> ContextWithActor<A> {
             }
 
             // batch receive new messages from channel.
-            're: loop {
+            'batch: loop {
                 match ctx.rx.get_mut().try_recv() {
-                    Ok(msg) => {
-                        if ctx.add_message(msg, drop_notify) {
-                            continue 'ctx;
-                        }
-                    }
-                    Err(TryRecvError::Empty) => break 're,
+                    Ok(msg) => match ctx.add_message(msg, drop_notify) {
+                        Some(ActorState::Stop) => break 'ctx,
+                        Some(ActorState::StopGraceful) => continue 'ctx,
+                        _ => continue 'batch,
+                    },
+                    Err(TryRecvError::Empty) => break 'batch,
                     Err(TryRecvError::Closed) => {
                         ctx.stop();
                         continue 'ctx;
@@ -473,7 +449,15 @@ impl<A: Actor> ContextWithActor<A> {
             }
 
             // block the task and recv one message if batch received nothing.
-            ctx.recv_one(drop_notify).await;
+            if ctx.queue.is_empty() {
+                match ctx.rx.get_mut().recv().await {
+                    Some(msg) => match ctx.add_message(msg, drop_notify) {
+                        Some(ActorState::Stop) => break 'ctx,
+                        _ => continue 'ctx,
+                    },
+                    None => break 'ctx,
+                }
+            }
         }
 
         actor.on_stop(ctx).await;

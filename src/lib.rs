@@ -1,5 +1,4 @@
-//! actix API(mostly) with async/await friendly. Actor state can be accessed directly in async
-//! block.
+//! actix API(mostly) with async/await friendly.
 //!
 //! # Example:
 //! ```rust
@@ -60,16 +59,21 @@
 mod actor;
 mod handler;
 mod message;
+mod types;
 
 pub mod address;
 pub mod context;
+pub mod error;
 pub mod prelude {
     pub use crate::actor::Actor;
     pub use crate::context::Context;
+    pub use crate::error::ActixAsyncError;
     pub use crate::handler::Handler;
     pub use crate::message::Message;
     pub use crate::runtime::{ActixRuntime, RuntimeService};
+    pub use crate::types::LocalBoxedFuture;
 }
+pub mod request;
 pub mod runtime;
 
 #[cfg(test)]
@@ -82,12 +86,8 @@ mod test {
     use actix_rt::Arbiter;
     use async_trait::async_trait;
 
-    use super::actor::Actor;
-    use super::context::Context;
-    use super::context::ContextJoinHandle;
-    use super::handler::Handler;
-    use super::message::Message;
-    use super::runtime::ActixRuntime;
+    use super::prelude::*;
+    use crate::context::ContextJoinHandle;
 
     #[actix_rt::test]
     async fn start_in_arbiter() {
@@ -138,6 +138,19 @@ mod test {
         actix_rt::time::sleep(Duration::from_millis(1600)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3)
+    }
+
+    #[actix_rt::test]
+    async fn test_timeout() {
+        let actor = TestActor;
+        let addr = actor.start();
+
+        let res = addr
+            .send(TestTimeoutMessage)
+            .timeout(Duration::from_secs(1))
+            .await;
+
+        assert!(res.is_err());
     }
 
     struct TestActor;
@@ -205,6 +218,19 @@ mod test {
             });
 
             (size, handle)
+        }
+    }
+
+    struct TestTimeoutMessage;
+
+    impl Message for TestTimeoutMessage {
+        type Result = ();
+    }
+
+    #[async_trait(?Send)]
+    impl Handler<TestTimeoutMessage> for TestActor {
+        async fn handle(&self, _: TestTimeoutMessage, _: &Context<Self>) {
+            <TestActor as Actor>::Runtime::sleep(Duration::from_secs(2)).await;
         }
     }
 }

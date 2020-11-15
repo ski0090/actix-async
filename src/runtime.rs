@@ -14,8 +14,10 @@ use tokio::time;
 ///
 /// use actix_async::prelude::*;
 ///
+/// // runtime type.
 /// struct AsyncStdRuntime;
 ///
+/// // runtime trait method would be called in actor.
 /// impl RuntimeService for AsyncStdRuntime {
 ///     type Sleep = Pin<Box<dyn Future<Output=()> + Send + 'static>>;
 ///
@@ -30,6 +32,7 @@ use tokio::time;
 ///     }
 /// }
 ///
+/// // actor can run on target runtime.
 /// struct AsyncStdActor;
 ///
 /// impl Actor for AsyncStdActor {
@@ -49,13 +52,45 @@ use tokio::time;
 ///     }
 /// }
 ///
+/// // actor runs on default actix runtime(tokio current thread runtime)
+/// struct TokioActor;
+///
+/// impl Actor for TokioActor {
+///     type Runtime = ActixRuntime;
+/// }
+///
+/// #[async_trait::async_trait(?Send)]
+/// impl Handler<TestMessage> for TokioActor {
+///     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
+///         251
+///     }
+/// }
+///
 /// #[async_std::main]
 /// async fn main() {
+///     // run actor in async-std runtime
 ///     let actor = AsyncStdActor;
 ///     let addr = actor.start();
 ///     let res = addr.send(TestMessage).await;
-///
 ///     assert_eq!(996, res.unwrap());
+///
+///     // run actor in actix runtime
+///     std::thread::spawn(|| {
+///         let local = tokio::task::LocalSet::new();
+///         let fut = async {
+///             let actor = TokioActor;
+///             let addr = actor.start();
+///             let res = addr.send(TestMessage).await;
+///             assert_eq!(251, res.unwrap());
+///         };
+///         tokio::runtime::Builder::new_current_thread()
+///             .enable_all()
+///             .build()
+///             .unwrap()
+///             .block_on(local.run_until(fut));
+///     })
+///     .join()
+///     .unwrap();
 /// }
 /// ```
 pub trait RuntimeService: Sized {
@@ -66,6 +101,7 @@ pub trait RuntimeService: Sized {
     fn sleep(dur: Duration) -> Self::Sleep;
 }
 
+/// default runtime.
 pub type ActixRuntime = (TokioRuntime, LocalSet);
 
 impl RuntimeService for ActixRuntime {

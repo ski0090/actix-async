@@ -1,11 +1,9 @@
-use core::future::Future;
-use core::pin::Pin;
-
 use async_trait::async_trait;
 
 use crate::actor::Actor;
 use crate::context::Context;
 use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};
+use crate::types::LocalBoxedFuture;
 
 #[async_trait(?Send)]
 pub trait Handler<M>
@@ -25,7 +23,7 @@ where
 impl<A, F, R> Handler<FunctionMessage<F, R>> for A
 where
     A: Actor,
-    F: for<'a> FnOnce(&'a A, &'a Context<A>) -> Pin<Box<dyn Future<Output = R> + 'a>> + 'static,
+    F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxedFuture<'a, R> + 'static,
     R: Send + 'static,
 {
     async fn handle(&self, msg: FunctionMessage<F, R>, ctx: &Context<Self>) -> R {
@@ -37,8 +35,7 @@ where
 impl<A, F, R> Handler<FunctionMutMessage<F, R>> for A
 where
     A: Actor,
-    F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> Pin<Box<dyn Future<Output = R> + 'a>>
-        + 'static,
+    F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxedFuture<'a, R> + 'static,
     R: Send + 'static,
 {
     async fn handle(&self, _: FunctionMutMessage<F, R>, _: &Context<Self>) -> R {
@@ -55,6 +52,8 @@ pub trait MessageHandler<A: Actor> {
     async fn handle(&mut self, act: &A, ctx: &Context<A>);
 
     async fn handle_wait(&mut self, act: &mut A, ctx: &mut Context<A>);
+
+    fn finished(&self) -> bool;
 }
 
 #[async_trait(?Send)]
@@ -93,5 +92,9 @@ where
                 }
             }
         }
+    }
+
+    fn finished(&self) -> bool {
+        self.msg.is_some()
     }
 }

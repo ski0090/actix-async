@@ -8,6 +8,7 @@ edition = "2018"
 actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-0.7.3" }
 async-trait = "0.1.41"
 futures-util = "0.3.8"
+pin-project = ""
 slab = "0.4.2"
 tokio = { version = "0.3.3", features = ["macros", "sync"] }
 
