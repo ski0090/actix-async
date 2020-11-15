@@ -66,6 +66,7 @@ pub mod context;
 pub mod error;
 pub mod prelude {
     pub use crate::actor::Actor;
+    pub use crate::address::AddrHandler;
     pub use crate::context::Context;
     pub use crate::error::ActixAsyncError;
     pub use crate::handler::Handler;
@@ -151,6 +152,36 @@ mod test {
             .await;
 
         assert!(res.is_err());
+    }
+
+    #[actix_rt::test]
+    async fn test_recipient() {
+        let actor = TestActor;
+        let addr = actor.start();
+
+        let re = addr.recipient::<TestMessage>();
+
+        let res = re.send(TestMessage).await;
+        assert_eq!(996, res.unwrap());
+
+        let res = re.wait(TestMessage).await;
+        assert_eq!(251, res.unwrap());
+
+        drop(re);
+
+        let re = addr.recipient_weak::<TestMessage>();
+
+        let res = re.send(TestMessage).await;
+        assert_eq!(996, res.unwrap());
+
+        let res = re.wait(TestMessage).await;
+        assert_eq!(251, res.unwrap());
+
+        drop(addr);
+
+        let res = re.send(TestMessage).await;
+
+        assert_eq!(res, Err(ActixAsyncError::Closed));
     }
 
     struct TestActor;

@@ -3,8 +3,6 @@ use core::ops::Deref;
 
 use std::sync::{Arc, Weak};
 
-use async_trait::async_trait;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
@@ -16,7 +14,8 @@ use crate::message::{
     message_send_check, ActorMessage, FunctionMessage, FunctionMutMessage, Message, MessageObject,
 };
 use crate::request::MessageRequest;
-use crate::types::LocalBoxedFuture;
+use crate::runtime::RuntimeService;
+use crate::types::{ActixResult, LocalBoxedFuture};
 
 pub struct Addr<A>(Arc<Sender<ActorMessage<A>>>);
 
@@ -40,11 +39,7 @@ impl<A: Actor> Addr<A> {
     pub fn send<M>(
         &self,
         msg: M,
-    ) -> MessageRequest<
-        A::Runtime,
-        impl Future<Output = Result<(), SendError<ActorMessage<A>>>> + '_,
-        M::Result,
-    >
+    ) -> MessageRequest<A::Runtime, impl Future<Output = ActixResult<()>> + '_, M::Result>
     where
         M: Message + Send,
         A: Handler<M>,
@@ -58,11 +53,7 @@ impl<A: Actor> Addr<A> {
     pub fn wait<M>(
         &self,
         msg: M,
-    ) -> MessageRequest<
-        A::Runtime,
-        impl Future<Output = Result<(), SendError<ActorMessage<A>>>> + '_,
-        M::Result,
-    >
+    ) -> MessageRequest<A::Runtime, impl Future<Output = ActixResult<()>> + '_, M::Result>
     where
         M: Message + Send,
         A: Handler<M>,
@@ -76,11 +67,7 @@ impl<A: Actor> Addr<A> {
     pub fn run<F, R>(
         &self,
         func: F,
-    ) -> MessageRequest<
-        A::Runtime,
-        impl Future<Output = Result<(), SendError<ActorMessage<A>>>> + '_,
-        R,
-    >
+    ) -> MessageRequest<A::Runtime, impl Future<Output = ActixResult<()>> + '_, R>
     where
         F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxedFuture<'a, R> + Send + 'static,
         R: Send + 'static,
@@ -96,11 +83,7 @@ impl<A: Actor> Addr<A> {
     pub fn run_wait<F, R>(
         &self,
         func: F,
-    ) -> MessageRequest<
-        A::Runtime,
-        impl Future<Output = Result<(), SendError<ActorMessage<A>>>> + '_,
-        R,
-    >
+    ) -> MessageRequest<A::Runtime, impl Future<Output = ActixResult<()>> + '_, R>
     where
         F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxedFuture<'a, R>
             + Send
@@ -134,11 +117,7 @@ impl<A: Actor> Addr<A> {
     pub fn stop(
         &self,
         graceful: bool,
-    ) -> MessageRequest<
-        A::Runtime,
-        impl Future<Output = Result<(), SendError<ActorMessage<A>>>> + '_,
-        (),
-    > {
+    ) -> MessageRequest<A::Runtime, impl Future<Output = ActixResult<()>> + '_, ()> {
         let state = if graceful {
             ActorState::StopGraceful
         } else {
@@ -148,7 +127,12 @@ impl<A: Actor> Addr<A> {
         let (tx, rx) = oneshot::channel();
 
         MessageRequest::new(
-            self.deref().send(ActorMessage::ActorState(state, Some(tx))),
+            async move {
+                self.deref()
+                    .send(ActorMessage::ActorState(state, Some(tx)))
+                    .await?;
+                Ok(())
+            },
             rx,
         )
     }
@@ -159,7 +143,7 @@ impl<A: Actor> Addr<A> {
     }
 
     /// Recipient bound to message type and not actor.
-    pub fn recipient<M>(&self) -> Recipient<M>
+    pub fn recipient<M>(&self) -> Recipient<A::Runtime, M>
     where
         M: Message + Send,
         A: Handler<M>,
@@ -171,7 +155,7 @@ impl<A: Actor> Addr<A> {
     ///
     /// *. `RecipientWeak` will stay usable as long as the actor and it's `Addr` are alive.
     /// It DOES NOT care if a strong Recipient is alive or not.
-    pub fn recipient_weak<M>(&self) -> RecipientWeak<M>
+    pub fn recipient_weak<M>(&self) -> RecipientWeak<A::Runtime, M>
     where
         M: Message + Send,
         A: Handler<M>,
@@ -187,22 +171,16 @@ impl<A: Actor> Addr<A> {
         &self,
         msg: M,
         f: F,
-    ) -> MessageRequest<
-        A::Runtime,
-        impl Future<Output = Result<(), SendError<ActorMessage<A>>>> + '_,
-        M::Result,
-    >
+    ) -> MessageRequest<A::Runtime, impl Future<Output = ActixResult<()>> + '_, M::Result>
     where
         M: Message + Send,
         A: Handler<M>,
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-
-        message_send_check::<M>();
-        let msg = MessageObject::new(msg, Some(tx));
-
-        MessageRequest::new(self.deref().send(f(msg)), rx)
+        send_with_async_closure(msg, |obj| async move {
+            self.deref().send(f(obj)).await?;
+            Ok(())
+        })
     }
 
     fn _do_send<M, F>(&self, msg: M, f: F)
@@ -220,6 +198,21 @@ impl<A: Actor> Addr<A> {
     }
 }
 
+fn send_with_async_closure<A, M, F, Fut>(msg: M, f: F) -> MessageRequest<A::Runtime, Fut, M::Result>
+where
+    M: Message + Send,
+    A: Handler<M>,
+    F: FnOnce(MessageObject<A>) -> Fut,
+{
+    let (tx, rx) = oneshot::channel();
+
+    message_send_check::<M>();
+    let msg = MessageObject::new(msg, Some(tx));
+    MessageRequest::new(f(msg), rx)
+}
+
+/// weak version `Addr`. Can upgrade to `Addr` when at least one instance of `Addr` is still in
+/// scope.
 pub struct WeakAddr<A>(Weak<Sender<ActorMessage<A>>>);
 
 impl<A: Actor> Clone for WeakAddr<A> {
@@ -234,53 +227,101 @@ impl<A: Actor> WeakAddr<A> {
     }
 }
 
-#[async_trait(?Send)]
-trait AddrHandler<M>
+pub trait AddrHandler<RT, M>
 where
+    RT: RuntimeService,
     M: Message + Send,
     Self: Send + Sync + 'static,
 {
-    async fn send(&self, msg: M) -> Result<M::Result, ActixAsyncError>;
+    fn send(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<'_, ActixResult<()>>, M::Result>;
 
-    async fn wait(&self, msg: M) -> Result<M::Result, ActixAsyncError>;
+    fn wait(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<'_, ActixResult<()>>, M::Result>;
 }
 
-#[async_trait(?Send)]
-impl<A, M> AddrHandler<M> for Addr<A>
+impl<A, M> AddrHandler<A::Runtime, M> for Addr<A>
 where
     A: Actor + Handler<M>,
     M: Message + Send,
 {
-    async fn send(&self, msg: M) -> Result<M::Result, ActixAsyncError> {
-        Addr::send(self, msg).await
+    fn send(
+        &self,
+        msg: M,
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
+            Box::pin(async move {
+                self.deref().send(ActorMessage::Ref(obj)).await?;
+                Ok(())
+            })
+        })
     }
 
-    async fn wait(&self, msg: M) -> Result<M::Result, ActixAsyncError> {
-        Addr::wait(self, msg).await
+    fn wait(
+        &self,
+        msg: M,
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
+            Box::pin(async move {
+                self.deref().send(ActorMessage::Mut(obj)).await?;
+                Ok(())
+            })
+        })
     }
 }
 
-#[async_trait(?Send)]
-impl<A, M> AddrHandler<M> for WeakAddr<A>
+impl<A, M> AddrHandler<A::Runtime, M> for WeakAddr<A>
 where
     A: Actor + Handler<M>,
     M: Message + Send,
 {
-    async fn send(&self, msg: M) -> Result<M::Result, ActixAsyncError> {
-        self.upgrade()
-            .ok_or(ActixAsyncError::Closed)?
-            .send(msg)
-            .await
+    fn send(
+        &self,
+        msg: M,
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
+            Box::pin(async move {
+                self.upgrade()
+                    .ok_or(ActixAsyncError::Closed)?
+                    .deref()
+                    .send(ActorMessage::Ref(obj))
+                    .await?;
+                Ok(())
+            })
+        })
     }
 
-    async fn wait(&self, msg: M) -> Result<M::Result, ActixAsyncError> {
-        self.upgrade()
-            .ok_or(ActixAsyncError::Closed)?
-            .wait(msg)
-            .await
+    fn wait(
+        &self,
+        msg: M,
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
+            Box::pin(async move {
+                self.upgrade()
+                    .ok_or(ActixAsyncError::Closed)?
+                    .deref()
+                    .send(ActorMessage::Mut(obj))
+                    .await?;
+                Ok(())
+            })
+        })
     }
 }
 
-pub struct Recipient<M: Message + Send>(Box<dyn AddrHandler<M>>);
+pub struct Recipient<RT, M: Message + Send>(Box<dyn AddrHandler<RT, M>>);
 
-pub struct RecipientWeak<M: Message + Send>(Box<dyn AddrHandler<M>>);
+impl<RT, M: Message + Send> Deref for Recipient<RT, M> {
+    type Target = Box<dyn AddrHandler<RT, M>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub struct RecipientWeak<RT, M: Message + Send>(Box<dyn AddrHandler<RT, M>>);
+
+impl<RT, M: Message + Send> Deref for RecipientWeak<RT, M> {
+    type Target = Box<dyn AddrHandler<RT, M>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}

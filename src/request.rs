@@ -3,11 +3,11 @@ use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
 
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::error::ActixAsyncError;
 use crate::runtime::RuntimeService;
+use crate::types::ActixResult;
 
 /// default timeout for sending message
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,12 +41,12 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     }
 }
 
-impl<RT, Fut, Res, T> Future for MessageRequest<RT, Fut, Res>
+impl<RT, Fut, Res> Future for MessageRequest<RT, Fut, Res>
 where
     RT: RuntimeService,
-    Fut: Future<Output = Result<(), SendError<T>>>,
+    Fut: Future<Output = ActixResult<()>>,
 {
-    type Output = Result<Res, ActixAsyncError>;
+    type Output = ActixResult<Res>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -54,7 +54,7 @@ where
         if !*this.sent {
             match this.fut.poll(cx) {
                 Poll::Ready(Ok(())) => *this.sent = true,
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => {
                     if Pin::new(this.timeout).poll(cx).is_ready() {
                         return Poll::Ready(Err(ActixAsyncError::Timeout));

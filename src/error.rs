@@ -5,6 +5,7 @@ use std::error::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot::error::RecvError;
 
+#[derive(PartialEq)]
 pub enum ActixAsyncError {
     /// actor's channel is closed. happens when actor is shutdown.
     Closed,
