@@ -8,7 +8,6 @@ use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
 use crate::types::LocalBoxedFuture;
-use crate::util::smart_pointer::RefCounter;
 
 pub(crate) const CHANNEL_CAP: usize = 256;
 
@@ -103,14 +102,6 @@ pub trait Actor: Sized + 'static {
             let _ = ctx.first_run().await;
         });
     }
-}
-
-impl<A: Actor> Actor for RefCounter<A> {
-    type Runtime = A::Runtime;
-}
-
-impl<A: Actor> Actor for Box<A> {
-    type Runtime = A::Runtime;
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

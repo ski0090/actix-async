@@ -82,11 +82,14 @@ pub mod runtime;
 
 #[cfg(test)]
 mod test {
+    use core::pin::Pin;
     use core::sync::atomic::{AtomicUsize, Ordering};
+    use core::task::{Context as StdContext, Poll};
     use core::time::Duration;
 
     use std::sync::Arc;
 
+    use actix_rt::time::{interval, sleep, Interval};
     use actix_rt::Arbiter;
     use async_trait::async_trait;
 
@@ -96,7 +99,7 @@ mod test {
     #[actix_rt::test]
     async fn start_in_arbiter() {
         let arb = Arbiter::new();
-        let addr = TestActor::start_in_arbiter(&arb, |_ctx| TestActor);
+        let addr = TestActor::start_in_arbiter(&arb, |_ctx| TestActor::default());
 
         let res = addr.send(TestMessage).await;
         assert_eq!(996, res.unwrap());
@@ -107,8 +110,7 @@ mod test {
 
     #[actix_rt::test]
     async fn stop_graceful() {
-        let actor = TestActor;
-        let addr = actor.start();
+        let addr = TestActor::default().start();
 
         let _ = addr.stop(true).await;
         assert!(addr.send(TestMessage).await.is_err());
@@ -116,8 +118,7 @@ mod test {
 
     #[actix_rt::test]
     async fn run_future() {
-        let actor = TestActor;
-        let addr = actor.start();
+        let addr = TestActor::default().start();
 
         let res = addr.run(|_act, _ctx| Box::pin(async move { 123 })).await;
         assert_eq!(123, res.unwrap());
@@ -130,24 +131,22 @@ mod test {
 
     #[actix_rt::test]
     async fn run_interval() {
-        let actor = TestActor;
-        let addr = actor.start();
+        let addr = TestActor::default().start();
 
         let (size, handle) = addr.send(TestIntervalMessage).await.unwrap();
-        actix_rt::time::sleep(Duration::from_millis(1600)).await;
+        sleep(Duration::from_millis(1600)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3);
 
         let (size, handle) = addr.wait(TestIntervalMessage).await.unwrap();
-        actix_rt::time::sleep(Duration::from_millis(1600)).await;
+        sleep(Duration::from_millis(1600)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3)
     }
 
     #[actix_rt::test]
     async fn test_timeout() {
-        let actor = TestActor;
-        let addr = actor.start();
+        let addr = TestActor::default().start();
 
         let res = addr
             .send(TestTimeoutMessage)
@@ -159,8 +158,7 @@ mod test {
 
     #[actix_rt::test]
     async fn test_recipient() {
-        let actor = TestActor;
-        let addr = actor.start();
+        let addr = TestActor::default().start();
 
         let re = addr.recipient::<TestMessage>();
 
@@ -187,25 +185,111 @@ mod test {
         assert_eq!(res, Err(ActixAsyncError::Closed));
     }
 
-    struct TestActor;
+    #[actix_rt::test]
+    async fn test_delay() {
+        let addr = TestActor::default().start();
 
+        let res = addr.send(TestDelayMessage).await.unwrap();
+        drop(res);
+
+        sleep(Duration::from_millis(400)).await;
+        let res = addr.send(TestMessage).await.unwrap();
+        assert_eq!(996, res);
+
+        sleep(Duration::from_millis(200)).await;
+        let res = addr.send(TestMessage).await.unwrap();
+        assert_eq!(997, res);
+
+        let res = addr.send(TestDelayMessage).await.unwrap();
+
+        sleep(Duration::from_millis(400)).await;
+        res.cancel();
+
+        sleep(Duration::from_millis(200)).await;
+        let res = addr.send(TestMessage).await.unwrap();
+        assert_eq!(997, res);
+    }
+
+    #[actix_rt::test]
+    async fn test_stream() {
+        let addr = TestActor::default().start();
+
+        struct TestStream {
+            interval: Interval,
+            state: Arc<AtomicUsize>,
+        }
+
+        impl futures_util::stream::Stream for TestStream {
+            type Item = TestMessage;
+
+            fn poll_next(
+                self: Pin<&mut Self>,
+                cx: &mut StdContext<'_>,
+            ) -> Poll<Option<Self::Item>> {
+                let this = self.get_mut();
+                if Pin::new(&mut this.interval).poll_next(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                this.state.fetch_add(1, Ordering::SeqCst);
+                Poll::Ready(Some(TestMessage))
+            }
+        }
+
+        let state = Arc::new(AtomicUsize::new(0));
+
+        let handle = addr
+            .run_wait({
+                let state = state.clone();
+                move |_, ctx| {
+                    Box::pin(async move {
+                        ctx.add_stream(TestStream {
+                            interval: interval(Duration::from_millis(400)),
+                            state,
+                        })
+                    })
+                }
+            })
+            .await
+            .unwrap();
+
+        sleep(Duration::from_millis(1600)).await;
+        handle.cancel();
+        sleep(Duration::from_millis(800)).await;
+        assert_eq!(4, state.load(Ordering::SeqCst));
+    }
+
+    struct TestActor(usize);
+
+    impl Default for TestActor {
+        fn default() -> Self {
+            Self(996)
+        }
+    }
+
+    #[async_trait(?Send)]
     impl Actor for TestActor {
         type Runtime = ActixRuntime;
+
+        async fn on_start(&mut self, _: &mut Context<Self>) {
+            self.0 += 1;
+            assert_eq!(997, self.0);
+            self.0 -= 1;
+        }
     }
 
     struct TestMessage;
 
     impl Message for TestMessage {
-        type Result = u32;
+        type Result = usize;
     }
 
     #[async_trait(?Send)]
     impl Handler<TestMessage> for TestActor {
-        async fn handle(&self, _: TestMessage, _: &Context<Self>) -> u32 {
-            996
+        async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
+            self.0
         }
 
-        async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> u32 {
+        async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> usize {
             251
         }
     }
@@ -265,6 +349,23 @@ mod test {
     impl Handler<TestTimeoutMessage> for TestActor {
         async fn handle(&self, _: TestTimeoutMessage, _: &Context<Self>) {
             <TestActor as Actor>::Runtime::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    struct TestDelayMessage;
+
+    impl Message for TestDelayMessage {
+        type Result = ContextJoinHandle;
+    }
+
+    #[async_trait(?Send)]
+    impl Handler<TestDelayMessage> for TestActor {
+        async fn handle(&self, _: TestDelayMessage, ctx: &Context<Self>) -> ContextJoinHandle {
+            ctx.run_wait_later(Duration::from_millis(500), |act, _| {
+                Box::pin(async move {
+                    act.0 += 1;
+                })
+            })
         }
     }
 }

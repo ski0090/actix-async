@@ -224,6 +224,16 @@ impl<A: Actor> WeakAddr<A> {
     pub fn upgrade(&self) -> Option<Addr<A>> {
         self.0.upgrade().map(Addr)
     }
+
+    pub(crate) async fn _send(&self, msg: ActorMessage<A>) -> ActixResult<()> {
+        self.upgrade()
+            .ok_or(ActixAsyncError::Closed)?
+            .deref()
+            .send(msg)
+            .await?;
+
+        Ok(())
+    }
 }
 
 pub trait AddrHandler<RT, M>
@@ -277,14 +287,7 @@ where
         msg: M,
     ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
         send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
-            Box::pin(async move {
-                self.upgrade()
-                    .ok_or(ActixAsyncError::Closed)?
-                    .deref()
-                    .send(ActorMessage::Ref(obj))
-                    .await?;
-                Ok(())
-            })
+            Box::pin(self._send(ActorMessage::Ref(obj)))
         })
     }
 
@@ -293,14 +296,7 @@ where
         msg: M,
     ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
         send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
-            Box::pin(async move {
-                self.upgrade()
-                    .ok_or(ActixAsyncError::Closed)?
-                    .deref()
-                    .send(ActorMessage::Mut(obj))
-                    .await?;
-                Ok(())
-            })
+            Box::pin(self._send(ActorMessage::Mut(obj)))
         })
     }
 }
@@ -308,19 +304,19 @@ where
 pub struct Recipient<RT, M: Message + Send>(Box<dyn AddrHandler<RT, M>>);
 
 impl<RT, M: Message + Send> Deref for Recipient<RT, M> {
-    type Target = Box<dyn AddrHandler<RT, M>>;
+    type Target = dyn AddrHandler<RT, M>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &*self.0
     }
 }
 
 pub struct RecipientWeak<RT, M: Message + Send>(Box<dyn AddrHandler<RT, M>>);
 
 impl<RT, M: Message + Send> Deref for RecipientWeak<RT, M> {
-    type Target = Box<dyn AddrHandler<RT, M>>;
+    type Target = dyn AddrHandler<RT, M>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &*self.0
     }
 }

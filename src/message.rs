@@ -5,9 +5,18 @@ use tokio::sync::oneshot;
 
 use crate::actor::{Actor, ActorState};
 use crate::handler::{Handler, MessageHandler};
+use crate::util::smart_pointer::RefCounter;
 
 pub trait Message: 'static {
     type Result: Send + 'static;
+}
+
+impl<M: Message> Message for RefCounter<M> {
+    type Result = M::Result;
+}
+
+impl<M: Message> Message for Box<M> {
+    type Result = M::Result;
 }
 
 pub(crate) struct FunctionMessage<F, R> {
@@ -149,6 +158,7 @@ pub enum ActorMessage<A> {
     Mut(MessageObject<A>),
     ActorState(ActorState, Option<oneshot::Sender<()>>),
     DelayToken(usize),
+    DelayTokenCancel(usize),
     IntervalToken(usize),
     IntervalTokenCancel(usize),
 }

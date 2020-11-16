@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use actix_async::prelude::*;
+use futures_util::stream::ForEachConcurrent;
 use futures_util::FutureExt;
 
 struct ClosureActor(usize);
