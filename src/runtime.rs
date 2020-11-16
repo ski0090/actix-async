@@ -1,10 +1,6 @@
 use core::future::Future;
 use core::time::Duration;
 
-use tokio::runtime::Runtime as TokioRuntime;
-use tokio::task::{spawn_local, LocalSet};
-use tokio::time;
-
 /// Runtime trait for running actor on various runtimes.
 /// # example:
 /// ```rust
@@ -101,19 +97,28 @@ pub trait RuntimeService: Sized {
     fn sleep(dur: Duration) -> Self::Sleep;
 }
 
-/// default runtime.
-pub type ActixRuntime = (TokioRuntime, LocalSet);
+#[cfg(feature = "actix-rt")]
+pub mod default_rt {
+    use super::*;
 
-impl RuntimeService for ActixRuntime {
-    type Sleep = time::Sleep;
+    use tokio::runtime::Runtime as TokioRuntime;
+    use tokio::task::{spawn_local, LocalSet};
+    use tokio::time;
 
-    #[inline]
-    fn spawn<F: Future<Output = ()> + 'static>(f: F) {
-        spawn_local(f);
-    }
+    /// default runtime.
+    pub type ActixRuntime = (TokioRuntime, LocalSet);
 
-    #[inline]
-    fn sleep(dur: Duration) -> Self::Sleep {
-        time::sleep(dur)
+    impl RuntimeService for ActixRuntime {
+        type Sleep = time::Sleep;
+
+        #[inline]
+        fn spawn<F: Future<Output = ()> + 'static>(f: F) {
+            spawn_local(f);
+        }
+
+        #[inline]
+        fn sleep(dur: Duration) -> Self::Sleep {
+            time::sleep(dur)
+        }
     }
 }

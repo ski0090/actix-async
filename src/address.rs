@@ -1,8 +1,6 @@
 use core::future::Future;
 use core::ops::Deref;
 
-use std::sync::{Arc, Weak};
-
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
@@ -16,8 +14,9 @@ use crate::message::{
 use crate::request::MessageRequest;
 use crate::runtime::RuntimeService;
 use crate::types::{ActixResult, LocalBoxedFuture};
+use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
-pub struct Addr<A>(Arc<Sender<ActorMessage<A>>>);
+pub struct Addr<A>(RefCounter<Sender<ActorMessage<A>>>);
 
 impl<A: Actor> Clone for Addr<A> {
     fn clone(&self) -> Self {
@@ -139,7 +138,7 @@ impl<A: Actor> Addr<A> {
 
     /// weak version of Addr that can be upgraded.
     pub fn downgrade(&self) -> WeakAddr<A> {
-        WeakAddr(Arc::downgrade(&self.0))
+        WeakAddr(RefCounter::downgrade(&self.0))
     }
 
     /// Recipient bound to message type and not actor.
@@ -164,7 +163,7 @@ impl<A: Actor> Addr<A> {
     }
 
     pub(crate) fn new(tx: Sender<ActorMessage<A>>) -> Self {
-        Self(Arc::new(tx))
+        Self(RefCounter::new(tx))
     }
 
     fn _send<M, F>(
@@ -213,7 +212,7 @@ where
 
 /// weak version `Addr`. Can upgrade to `Addr` when at least one instance of `Addr` is still in
 /// scope.
-pub struct WeakAddr<A>(Weak<Sender<ActorMessage<A>>>);
+pub struct WeakAddr<A>(WeakRefCounter<Sender<ActorMessage<A>>>);
 
 impl<A: Actor> Clone for WeakAddr<A> {
     fn clone(&self) -> Self {

@@ -1,11 +1,12 @@
 use core::cell::{Cell, RefCell};
 use core::ops::Deref;
+use core::pin::Pin;
 use core::time::Duration;
 
-use std::collections::VecDeque;
-
+use futures_util::future::{select, Either};
 use futures_util::stream::{Stream, StreamExt};
 use slab::Slab;
+use slice_deque::SliceDeque;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::oneshot;
@@ -20,7 +21,7 @@ use crate::types::LocalBoxedFuture;
 
 pub struct Context<A> {
     state: Cell<ActorState>,
-    queue: VecDeque<ActorMessage<A>>,
+    queue: SliceDeque<ActorMessage<A>>,
     interval_queue: RefCell<Slab<IntervalMessage<A>>>,
     delay_queue: RefCell<Slab<ActorMessage<A>>>,
     tx: WeakAddr<A>,
@@ -43,7 +44,7 @@ impl<A: Actor> Context<A> {
     pub(crate) fn new(tx: WeakAddr<A>, rx: Receiver<ActorMessage<A>>) -> Self {
         Context {
             state: Cell::new(ActorState::Stop),
-            queue: VecDeque::with_capacity(CHANNEL_CAP),
+            queue: SliceDeque::with_capacity(CHANNEL_CAP),
             interval_queue: RefCell::new(Slab::with_capacity(8)),
             delay_queue: RefCell::new(Slab::with_capacity(CHANNEL_CAP)),
             tx,
@@ -173,67 +174,75 @@ impl<A: Actor> Context<A> {
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy + 'static,
     {
         let tx = self.tx.clone();
-        let (tx2, mut rx2) = oneshot::channel();
+        let (tx_cancel, mut rx_cancel) = oneshot::channel();
 
         A::spawn(async move {
-            tokio::pin!(stream);
+            let mut stream = stream;
+            // SAFETY:
+            // stream is owned by async task and never moved. The loop would borrow pinned stream
+            // with `Next`.
+            let mut stream = unsafe { Pin::new_unchecked(&mut stream) };
             loop {
-                tokio::select! {
-                    rx2 = (&mut rx2) => {
-                        if rx2.is_ok() {
+                match select(&mut rx_cancel, stream.next()).await {
+                    Either::Left((cancel, _)) => {
+                        if cancel.is_ok() {
                             return;
                         }
                     }
-                    item = stream.next() => {
-                        if let Some(msg) = item {
-                            if let Some(tx) = tx.upgrade() {
-                                let msg = MessageObject::new(msg, None);
-                                if tx.deref().send(f(msg)).await.is_ok() {
-                                    continue;
-                                }
-                            }
+                    Either::Right((Some(msg), _)) => {
+                        let msg = MessageObject::new(msg, None);
+                        match tx.upgrade() {
+                            Some(tx) if tx.deref().send(f(msg)).await.is_ok() => continue,
+                            _ => return,
                         }
-                        return;
                     }
+                    Either::Right((None, _)) => return,
                 }
             }
         });
 
-        ContextJoinHandle { handle: tx2 }
+        ContextJoinHandle { handle: tx_cancel }
     }
 
     fn interval(&self, dur: Duration, msg: IntervalMessage<A>) -> ContextJoinHandle {
         let token = self.interval_queue.borrow_mut().insert(msg);
 
         let tx = self.tx.clone();
-        let (tx2, mut rx2) = oneshot::channel();
+        let (tx_cancel, mut rx_cancel) = oneshot::channel();
 
         A::spawn(async move {
             let mut sleep = A::sleep(dur);
             loop {
-                tokio::select! {
-                    rx2 = (&mut rx2) => {
-                        if rx2.is_ok() {
+                match select(&mut rx_cancel, &mut sleep).await {
+                    Either::Left((cancel, _)) => {
+                        if cancel.is_ok() {
                             if let Some(tx) = tx.upgrade() {
-                                let _ = tx.deref().send(ActorMessage::IntervalTokenCancel(token)).await;
+                                let _ = tx
+                                    .deref()
+                                    .send(ActorMessage::IntervalTokenCancel(token))
+                                    .await;
                             }
                             return;
                         }
                     }
-                    _ = (&mut sleep) => {
-                        match tx.upgrade() {
-                            Some(tx) if tx.deref().send(ActorMessage::IntervalToken(token)).await.is_ok() => {
-                                sleep = A::sleep(dur);
-                                continue;
-                            },
-                            _ => return
+                    Either::Right(_) => match tx.upgrade() {
+                        Some(tx)
+                            if tx
+                                .deref()
+                                .send(ActorMessage::IntervalToken(token))
+                                .await
+                                .is_ok() =>
+                        {
+                            sleep = A::sleep(dur);
+                            continue;
                         }
-                    }
+                        _ => return,
+                    },
                 }
             }
         });
 
-        ContextJoinHandle { handle: tx2 }
+        ContextJoinHandle { handle: tx_cancel }
     }
 
     fn later(&self, dur: Duration, msg: ActorMessage<A>) {
@@ -315,8 +324,7 @@ impl<A: Actor> Context<A> {
                     self.handle_concurrent(&*actor, cache_ref).await;
 
                     // pop the cache and handle
-                    let mut msg = cache_mut.take().unwrap();
-                    msg.handle_wait(actor, self).await;
+                    cache_mut.take().unwrap().handle_wait(actor, self).await;
                 }
                 // have concurrent message.
                 Some(ActorMessage::Ref(msg)) => cache_ref.push(msg),

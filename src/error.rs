@@ -1,7 +1,5 @@
 use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
-use std::error::Error;
-
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot::error::RecvError;
 
@@ -57,4 +55,4 @@ impl Display for ActixAsyncError {
     }
 }
 
-impl Error for ActixAsyncError {}
+impl std::error::Error for ActixAsyncError {}

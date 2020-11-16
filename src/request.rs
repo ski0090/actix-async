@@ -12,17 +12,18 @@ use crate::types::ActixResult;
 /// default timeout for sending message
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Request to actor with timeout setting.
-#[pin_project::pin_project]
-pub struct MessageRequest<RT, Fut, Res>
-where
-    RT: RuntimeService,
-{
-    #[pin]
-    fut: Fut,
-    sent: bool,
-    rx: oneshot::Receiver<Res>,
-    timeout: RT::Sleep,
+pin_project_lite::pin_project! {
+    /// Request to actor with timeout setting.
+    pub struct MessageRequest<RT, Fut, Res>
+    where
+        RT: RuntimeService,
+    {
+        #[pin]
+        fut: Fut,
+        sent: bool,
+        rx: oneshot::Receiver<Res>,
+        timeout: RT::Sleep,
+    }
 }
 
 impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
@@ -35,6 +36,7 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
         }
     }
 
+    /// set the timeout duration for request.
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = RT::sleep(dur);
         self

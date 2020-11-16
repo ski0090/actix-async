@@ -1,28 +1,47 @@
 use core::future::Future;
 use core::time::Duration;
 
-use actix_rt::Arbiter;
-use async_trait::async_trait;
 use tokio::sync::mpsc::{channel, Receiver};
 
 use crate::address::{Addr, WeakAddr};
 use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
+use crate::types::LocalBoxedFuture;
+use crate::util::smart_pointer::RefCounter;
 
 pub(crate) const CHANNEL_CAP: usize = 256;
 
-#[async_trait(?Send)]
 pub trait Actor: Sized + 'static {
     type Runtime: RuntimeService;
 
     /// async hook before actor start to run.
     #[allow(unused_variables)]
-    async fn on_start(&mut self, ctx: &mut Context<Self>) {}
+    fn on_start<'act, 'ctx, 'res>(
+        &'act mut self,
+        ctx: &'ctx mut Context<Self>,
+    ) -> LocalBoxedFuture<'res, ()>
+    where
+        'act: 'res,
+        'ctx: 'res,
+        Self: 'res,
+    {
+        Box::pin(async {})
+    }
 
     /// async hook before actor stops
     #[allow(unused_variables)]
-    async fn on_stop(&mut self, ctx: &mut Context<Self>) {}
+    fn on_stop<'act, 'ctx, 'res>(
+        &'act mut self,
+        ctx: &'ctx mut Context<Self>,
+    ) -> LocalBoxedFuture<'res, ()>
+    where
+        'act: 'res,
+        'ctx: 'res,
+        Self: 'res,
+    {
+        Box::pin(async {})
+    }
 
     /// start the actor on current thread and return it's address
     fn start(self) -> Addr<Self> {
@@ -45,7 +64,8 @@ pub trait Actor: Sized + 'static {
     }
 
     /// create actor with closure and start it in the given arbiter
-    fn start_in_arbiter<F>(arb: &Arbiter, f: F) -> Addr<Self>
+    #[cfg(feature = "actix-rt")]
+    fn start_in_arbiter<F>(arb: &actix_rt::Arbiter, f: F) -> Addr<Self>
     where
         F: FnOnce(&mut Context<Self>) -> Self + Send + 'static,
     {
@@ -83,6 +103,14 @@ pub trait Actor: Sized + 'static {
             let _ = ctx.first_run().await;
         });
     }
+}
+
+impl<A: Actor> Actor for RefCounter<A> {
+    type Runtime = A::Runtime;
+}
+
+impl<A: Actor> Actor for Box<A> {
+    type Runtime = A::Runtime;
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

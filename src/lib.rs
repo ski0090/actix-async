@@ -60,6 +60,7 @@ mod actor;
 mod handler;
 mod message;
 mod types;
+mod util;
 
 pub mod address;
 pub mod context;
@@ -71,7 +72,9 @@ pub mod prelude {
     pub use crate::error::ActixAsyncError;
     pub use crate::handler::Handler;
     pub use crate::message::Message;
-    pub use crate::runtime::{ActixRuntime, RuntimeService};
+    #[cfg(feature = "actix-rt")]
+    pub use crate::runtime::default_rt::ActixRuntime;
+    pub use crate::runtime::RuntimeService;
     pub use crate::types::LocalBoxedFuture;
 }
 pub mod request;

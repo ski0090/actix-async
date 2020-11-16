@@ -4,13 +4,22 @@ version = "0.1.0"
 authors = ["fakeshadow <24548779@qq.com>"]
 edition = "2018"
 
+[features]
+default = ["actix-rt"]
+
+[[example]]
+name = "closure"
+path = "./examples/closure.rs"
+
 [dependencies]
-actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-0.7.3" }
-async-trait = "0.1.41"
-futures-util = "0.3.8"
-pin-project = ""
+futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
+pin-project-lite = "0.1.11"
 slab = "0.4.2"
-tokio = { version = "0.3.3", features = ["macros", "sync"] }
+slice-deque = { version = "0.3.0", default-features = false }
+tokio = { version = "0.3.3", default-features = false, features = ["sync"] }
+
+actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-0.7.3", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
+async-trait = "0.1.41"
