@@ -15,7 +15,6 @@ path = "./examples/closure.rs"
 futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
 pin-project-lite = "0.1.11"
 slab = "0.4.2"
-slice-deque = { version = "0.3.0", default-features = false }
 tokio = { version = "0.3.3", default-features = false, features = ["sync"] }
 
 actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-0.7.3", optional = true }
