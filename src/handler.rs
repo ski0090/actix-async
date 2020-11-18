@@ -3,11 +3,52 @@ use crate::context::Context;
 use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};
 use crate::util::futures::LocalBoxedFuture;
 
+/// Trait define how actor handle a message.
+/// # example:
+/// ```rust:
+/// use actix_async::prelude::*;
+/// use actix_async::message;
+///
+/// struct TestActor;
+///
+/// impl Actor for TestActor {
+///     type Runtime = ActixRuntime;
+/// }
+///
+/// struct TestMessage;
+/// message!(TestMessage, ());
+///
+/// struct TestMessage2;
+/// message!(TestMessage2, ());
+///
+/// // use async method directly with the help of async_trait crate.
+/// #[async_trait::async_trait(?Send)]
+/// impl Handler<TestMessage> for TestActor {
+///    async fn handle(&self, _: TestMessage,ctx: &Context<Self>) {
+///         let _this = self;
+///         let _ctx = ctx;
+///         println!("hello from TestMessage");
+///     }
+/// }
+///
+/// // impl boxed future manually without async_trait.
+/// impl Handler<TestMessage2> for TestActor {
+///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: &'c Context<Self>) -> LocalBoxedFuture<'r, ()> {
+///         Box::pin(async move {
+///             let _this = self;
+///             let _ctx = ctx;
+///             println!("hello from TestMessage2");
+///         })
+///     }
+/// }
+/// ```
 pub trait Handler<M>
 where
     M: Message,
     Self: Actor,
 {
+    /// concurrent handler. `Actor` and `Context` are borrowed immutably so it's safe to handle
+    /// multiple messages at the same time.
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         msg: M,
@@ -18,7 +59,8 @@ where
         'ctx: 'res,
         Self: 'res;
 
-    // fall back to handle by default
+    /// exclusive handler. `Actor` and `Context` are borrowed mutably so only one message can be
+    /// handle at any given time. `Actor` would block on this method until it's finished.
     fn handle_wait<'act, 'ctx, 'res>(
         &'act mut self,
         msg: M,
@@ -29,6 +71,7 @@ where
         'ctx: 'res,
         Self: 'res,
     {
+        // fall back to handle by default
         self.handle(msg, ctx)
     }
 }

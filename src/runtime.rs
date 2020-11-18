@@ -105,7 +105,7 @@ pub mod default_rt {
     use tokio::task::{spawn_local, LocalSet};
     use tokio::time;
 
-    /// default runtime.
+    /// default runtime(tokio current thread runtime).
     #[allow(dead_code)]
     pub struct ActixRuntime {
         rt: TokioRuntime,

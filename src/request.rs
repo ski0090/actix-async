@@ -12,7 +12,7 @@ use crate::util::channel::OneshotReceiver;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pin_project_lite::pin_project! {
-    /// Request to actor with timeout setting.
+    /// Message request to actor with timeout setting.
     pub struct MessageRequest<RT, Fut, Res>
     where
         RT: RuntimeService
@@ -23,9 +23,8 @@ pin_project_lite::pin_project! {
 }
 
 pin_project_lite::pin_project! {
-    /// Request to actor with timeout setting.
     #[project = StateProj]
-    pub enum MessageRequestState<RT, Fut, Res>
+    enum MessageRequestState<RT, Fut, Res>
     where
         RT: RuntimeService
     {
@@ -59,6 +58,8 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     }
 
     /// set the timeout duration for request.
+    ///
+    /// Default to 10 seconds.
     pub fn timeout(self, dur: Duration) -> Self {
         match self.state {
             MessageRequestState::Request {
@@ -79,6 +80,8 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     }
 
     /// set the timeout duration for response.(start from the message arrives at actor)
+    ///
+    /// Default to no timeout.
     pub fn timeout_response(self, dur: Duration) -> Self {
         match self.state {
             MessageRequestState::Request {

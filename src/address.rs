@@ -15,6 +15,7 @@ use crate::util::channel::{oneshot_channel, Sender};
 use crate::util::futures::LocalBoxedFuture;
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
+/// The message sink of `Actor` type. `Message` and boxed async blocks are sent to Actor through it.
 pub struct Addr<A>(RefCounter<Sender<ActorMessage<A>>>);
 
 impl<A: Actor> Clone for Addr<A> {
@@ -111,7 +112,9 @@ impl<A: Actor> Addr<A> {
         self._do_send(msg, ActorMessage::Mut);
     }
 
-    /// stop actor
+    /// stop actor.
+    /// When graceful is true the actor would shut it's channel and drain all remaining messages
+    /// and exit. When false the actor would exit as soon as the stop message is handled.
     pub fn stop(
         &self,
         graceful: bool,
@@ -235,6 +238,7 @@ impl<A: Actor> WeakAddr<A> {
     }
 }
 
+/// trait to bind a given `Addr<A>` or `WeakAddr<A>` to `Message` trait type.
 pub trait AddrHandler<RT, M>
 where
     RT: RuntimeService,
@@ -324,6 +328,7 @@ where
     }
 }
 
+/// A trait object of `Addr<Actor>` that bind to given `Message` type
 pub struct Recipient<RT, M: Message + Send>(Box<dyn AddrHandler<RT, M>>);
 
 impl<RT, M: Message + Send> Deref for Recipient<RT, M> {
@@ -334,6 +339,7 @@ impl<RT, M: Message + Send> Deref for Recipient<RT, M> {
     }
 }
 
+/// A trait object of `WeakAddr<Actor>` that bind to given `Message` type
 pub struct RecipientWeak<RT, M: Message + Send>(Box<dyn AddrHandler<RT, M>>);
 
 impl<RT, M: Message + Send> Deref for RecipientWeak<RT, M> {

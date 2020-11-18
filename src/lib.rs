@@ -36,7 +36,7 @@
 //!
 //! #[actix_rt::main]
 //! async fn main() {
-//!     // construct message
+//!     // construct actor
 //!     let actor = TestActor;
 //!
 //!     // start actor and get address

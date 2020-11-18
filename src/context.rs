@@ -13,6 +13,10 @@ use crate::message::{
 use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
 use crate::util::futures::{cancelable, join, next, JoinedFutures, LocalBoxedFuture, Stream};
 
+/// Context type of `Actor` type. Can be accessed within `Handler::handle` and
+/// `Handler::handle_wait` method.
+///
+/// Used to mutate the state of actor and add additional tasks to actor.
 pub struct Context<A> {
     state: Cell<ActorState>,
     interval_queue: RefCell<Slab<IntervalMessage<A>>>,
@@ -28,6 +32,7 @@ pub struct ContextJoinHandle {
 }
 
 impl ContextJoinHandle {
+    /// cancel the task added to context associate to this handle. would consume self.
     pub fn cancel(self) {
         let _ = self.handle.send(());
     }

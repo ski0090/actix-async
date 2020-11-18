@@ -10,7 +10,9 @@ use crate::util::futures::LocalBoxedFuture;
 
 pub(crate) const CHANNEL_CAP: usize = 256;
 
+/// trait for stateful async actor.
 pub trait Actor: Sized + 'static {
+    /// actor is async and needs a runtime.
     type Runtime: RuntimeService;
 
     /// async hook before actor start to run.
