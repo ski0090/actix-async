@@ -99,9 +99,12 @@ impl Future for Join<'_> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        for i in 0..this.fut.len() {
+        let mut i = 0;
+        while i < this.fut.len() {
             if this.fut[i].as_mut().poll(cx).is_ready() {
                 this.fut.swap_remove(i);
+            } else {
+                i += 1;
             }
         }
 
