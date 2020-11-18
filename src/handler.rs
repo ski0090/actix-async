@@ -109,7 +109,7 @@ pub trait MessageHandler<A: Actor> {
         'ctx: 'res,
         Self: 'res;
 
-    fn finished(&self) -> bool;
+    fn is_taken(&self) -> bool;
 }
 
 impl<A, M> MessageHandler<A> for MessageHandlerContainer<M>
@@ -173,7 +173,7 @@ where
         })
     }
 
-    fn finished(&self) -> bool {
+    fn is_taken(&self) -> bool {
         self.msg.is_some()
     }
 }

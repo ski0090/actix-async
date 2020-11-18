@@ -70,20 +70,20 @@ use core::time::Duration;
 ///     let res = addr.send(TestMessage).await;
 ///     assert_eq!(996, res.unwrap());
 ///
-///     // run actor in actix runtime
+///     // run actor in tokio runtime
 ///     std::thread::spawn(|| {
 ///         let local = tokio::task::LocalSet::new();
-///         let fut = async {
+///         local.spawn_local(async {
 ///             let actor = TokioActor;
 ///             let addr = actor.start();
 ///             let res = addr.send(TestMessage).await;
 ///             assert_eq!(251, res.unwrap());
-///         };
+///         });
 ///         tokio::runtime::Builder::new_current_thread()
 ///             .enable_all()
 ///             .build()
 ///             .unwrap()
-///             .block_on(local.run_until(fut));
+///             .block_on(local);
 ///     })
 ///     .join()
 ///     .unwrap();
@@ -106,7 +106,11 @@ pub mod default_rt {
     use tokio::time;
 
     /// default runtime.
-    pub type ActixRuntime = (TokioRuntime, LocalSet);
+    #[allow(dead_code)]
+    pub struct ActixRuntime {
+        rt: TokioRuntime,
+        local: LocalSet,
+    }
 
     impl RuntimeService for ActixRuntime {
         type Sleep = time::Sleep;

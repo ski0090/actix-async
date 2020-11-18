@@ -1,7 +1,6 @@
 use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::oneshot::error::RecvError;
+use crate::util::channel::{OneshotRecvError, SendError};
 
 #[derive(PartialEq)]
 pub enum ActixAsyncError {
@@ -23,8 +22,8 @@ impl<T> From<SendError<T>> for ActixAsyncError {
     }
 }
 
-impl From<RecvError> for ActixAsyncError {
-    fn from(_: RecvError) -> Self {
+impl From<OneshotRecvError> for ActixAsyncError {
+    fn from(_: OneshotRecvError) -> Self {
         ActixAsyncError::Response
     }
 }

@@ -1,13 +1,12 @@
 use core::future::Future;
 use core::time::Duration;
 
-use tokio::sync::mpsc::{channel, Receiver};
-
 use crate::address::{Addr, WeakAddr};
 use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
 use crate::types::LocalBoxedFuture;
+use crate::util::channel::{channel, Receiver};
 
 pub(crate) const CHANNEL_CAP: usize = 256;
 

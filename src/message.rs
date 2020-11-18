@@ -1,10 +1,9 @@
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
-use tokio::sync::oneshot;
-
 use crate::actor::{Actor, ActorState};
 use crate::handler::{Handler, MessageHandler};
+use crate::util::channel::OneshotSender;
 use crate::util::smart_pointer::RefCounter;
 
 pub trait Message: 'static {
@@ -125,7 +124,7 @@ unsafe impl<A> Send for MessageObject<A> {}
 pub(crate) fn message_send_check<M: Message + Send>() {}
 
 impl<A> MessageObject<A> {
-    pub(crate) fn new<M>(msg: M, tx: Option<oneshot::Sender<M::Result>>) -> MessageObject<A>
+    pub(crate) fn new<M>(msg: M, tx: Option<OneshotSender<M::Result>>) -> MessageObject<A>
     where
         A: Actor + Handler<M>,
         M: Message,
@@ -135,28 +134,28 @@ impl<A> MessageObject<A> {
 }
 
 impl<A> Deref for MessageObject<A> {
-    type Target = Box<dyn MessageHandler<A>>;
+    type Target = dyn MessageHandler<A>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &*self.0
     }
 }
 
 impl<A> DerefMut for MessageObject<A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut *self.0
     }
 }
 
 pub(crate) struct MessageHandlerContainer<M: Message> {
     pub(crate) msg: Option<M>,
-    pub(crate) tx: Option<oneshot::Sender<M::Result>>,
+    pub(crate) tx: Option<OneshotSender<M::Result>>,
 }
 
 pub enum ActorMessage<A> {
     Ref(MessageObject<A>),
     Mut(MessageObject<A>),
-    ActorState(ActorState, Option<oneshot::Sender<()>>),
+    ActorState(ActorState, Option<OneshotSender<()>>),
     DelayToken(usize),
     DelayTokenCancel(usize),
     IntervalToken(usize),

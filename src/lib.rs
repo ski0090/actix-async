@@ -151,6 +151,7 @@ mod test {
         let res = addr
             .send(TestTimeoutMessage)
             .timeout(Duration::from_secs(1))
+            .timeout_response(Duration::from_secs(1))
             .await;
 
         assert!(res.is_err());
@@ -205,7 +206,7 @@ mod test {
         sleep(Duration::from_millis(400)).await;
         res.cancel();
 
-        sleep(Duration::from_millis(200)).await;
+        sleep(Duration::from_millis(300)).await;
         let res = addr.send(TestMessage).await.unwrap();
         assert_eq!(997, res);
     }

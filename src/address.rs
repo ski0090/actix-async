@@ -1,9 +1,6 @@
 use core::future::Future;
 use core::ops::Deref;
 
-use tokio::sync::mpsc::Sender;
-use tokio::sync::oneshot;
-
 use crate::actor::{Actor, ActorState};
 use crate::context::Context;
 use crate::error::ActixAsyncError;
@@ -14,6 +11,7 @@ use crate::message::{
 use crate::request::MessageRequest;
 use crate::runtime::RuntimeService;
 use crate::types::{ActixResult, LocalBoxedFuture};
+use crate::util::channel::{oneshot_channel, Sender};
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
 pub struct Addr<A>(RefCounter<Sender<ActorMessage<A>>>);
@@ -123,7 +121,7 @@ impl<A: Actor> Addr<A> {
             ActorState::Stop
         };
 
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot_channel();
 
         MessageRequest::new(
             async move {
@@ -203,7 +201,7 @@ where
     A: Handler<M>,
     F: FnOnce(MessageObject<A>) -> Fut,
 {
-    let (tx, rx) = oneshot::channel();
+    let (tx, rx) = oneshot_channel();
 
     message_send_check::<M>();
     let msg = MessageObject::new(msg, Some(tx));
@@ -214,7 +212,7 @@ where
 /// scope.
 pub struct WeakAddr<A>(WeakRefCounter<Sender<ActorMessage<A>>>);
 
-impl<A: Actor> Clone for WeakAddr<A> {
+impl<A> Clone for WeakAddr<A> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
@@ -245,6 +243,10 @@ where
     fn send(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<'_, ActixResult<()>>, M::Result>;
 
     fn wait(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<'_, ActixResult<()>>, M::Result>;
+
+    fn do_send(&self, msg: M);
+
+    fn do_wait(&self, msg: M);
 }
 
 impl<A, M> AddrHandler<A::Runtime, M> for Addr<A>
@@ -275,6 +277,14 @@ where
             })
         })
     }
+
+    fn do_send(&self, msg: M) {
+        Addr::do_send(self, msg);
+    }
+
+    fn do_wait(&self, msg: M) {
+        Addr::do_wait(self, msg);
+    }
 }
 
 impl<A, M> AddrHandler<A::Runtime, M> for WeakAddr<A>
@@ -298,6 +308,18 @@ where
         send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
             Box::pin(self._send(ActorMessage::Mut(obj)))
         })
+    }
+
+    /// `AddrHandler::do_send` will panic if the `Addr` for `RecipientWeak` is gone.
+    fn do_send(&self, msg: M) {
+        let addr = &self.upgrade().unwrap();
+        Addr::do_send(addr, msg);
+    }
+
+    /// `AddrHandler::do_wait` will panic if the `Addr` for `RecipientWeak` is gone.
+    fn do_wait(&self, msg: M) {
+        let addr = &self.upgrade().unwrap();
+        Addr::do_wait(addr, msg);
     }
 }
 
