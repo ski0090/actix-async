@@ -3,7 +3,7 @@ on:
     types: [opened, synchronize, reopened]
   push:
     branches:
-      - master
+      - main
 
 name: Clippy and rustfmt Check
 jobs:
