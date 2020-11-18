@@ -7,13 +7,15 @@ pub enum ActixAsyncError {
     /// actor's channel is closed. happens when actor is shutdown.
     Closed,
 
-    /// failed to get a response in time.
-    /// (The message could have reached the actor without producing a response in time).
-    Timeout,
+    /// failed to send message to actor in time.
+    SendTimeout,
 
-    /// actor fail to return a response for given message. happens when actor is blocked or the
+    /// failed to receive result from actor in time.
+    ReceiveTimeout,
+
+    /// fail to receive result for given message. happens when actor is blocked or the
     /// thread it runs on panicked.
-    Response,
+    Receive,
 }
 
 impl<T> From<SendError<T>> for ActixAsyncError {
@@ -24,7 +26,7 @@ impl<T> From<SendError<T>> for ActixAsyncError {
 
 impl From<OneshotRecvError> for ActixAsyncError {
     fn from(_: OneshotRecvError) -> Self {
-        ActixAsyncError::Response
+        ActixAsyncError::Receive
     }
 }
 
@@ -36,12 +38,17 @@ impl Debug for ActixAsyncError {
             ActixAsyncError::Closed => fmt
                 .field("cause", &"Closed")
                 .field("description", &"Actor is already closed"),
-            ActixAsyncError::Timeout => fmt
-                .field("cause", &"Timeout")
-                .field("description", &"MessageRequest is timed out. (The message could have reached the actor without producing a response in time)"),
-            ActixAsyncError::Response => fmt
-                .field("cause", &"Response")
-                .field("description", &"Failed to get response from Actor"),
+            ActixAsyncError::SendTimeout => fmt.field("cause", &"SendTimeout").field(
+                "description",
+                &"MessageRequest is timed out. (Failed to send message to actor in time.)",
+            ),
+            ActixAsyncError::ReceiveTimeout => fmt.field("cause", &"ReceiveTimeout").field(
+                "description",
+                &"MessageRequest is timed out. (Failed to receive result from actor in time.)",
+            ),
+            ActixAsyncError::Receive => fmt
+                .field("cause", &"Receive")
+                .field("description", &"Fail to receive result for given message."),
         };
 
         fmt.finish()

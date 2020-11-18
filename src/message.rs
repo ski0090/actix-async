@@ -10,6 +10,15 @@ pub trait Message: 'static {
     type Result: Send + 'static;
 }
 
+#[macro_export]
+macro_rules! message {
+    ($ty: ty, $res: ty) => {
+        impl Message for $ty {
+            type Result = $res;
+        }
+    };
+}
+
 impl<M: Message> Message for RefCounter<M> {
     type Result = M::Result;
 }

@@ -1,7 +1,7 @@
 use crate::actor::Actor;
 use crate::context::Context;
 use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};
-use crate::types::LocalBoxedFuture;
+use crate::util::futures::LocalBoxedFuture;
 
 pub trait Handler<M>
 where

@@ -43,6 +43,9 @@ pin_project_lite::pin_project! {
     }
 }
 
+const TIMEOUT_CONFIGURABLE: &'static str =
+    "Timeout is not configurable after Request Future is polled";
+
 impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     pub(crate) fn new(fut: Fut, rx: OneshotReceiver<Res>) -> Self {
         Self {
@@ -71,7 +74,7 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
                     timeout_response,
                 },
             },
-            _ => unreachable!("Timeout is not configurable after Request Future is polled"),
+            _ => unreachable!(TIMEOUT_CONFIGURABLE),
         }
     }
 
@@ -88,7 +91,7 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
                     timeout_response: Some(RT::sleep(dur)),
                 },
             },
-            _ => unreachable!("Timeout is not configurable after Request Future is polled"),
+            _ => unreachable!(TIMEOUT_CONFIGURABLE),
         }
     }
 }
@@ -122,7 +125,7 @@ where
                 }
                 Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
                 Poll::Pending => match Pin::new(timeout).poll(cx) {
-                    Poll::Ready(_) => Poll::Ready(Err(ActixAsyncError::Timeout)),
+                    Poll::Ready(_) => Poll::Ready(Err(ActixAsyncError::SendTimeout)),
                     Poll::Pending => Poll::Pending,
                 },
             },
@@ -134,7 +137,7 @@ where
                 Poll::Pending => {
                     if let Some(ref mut timeout) = timeout_response {
                         if Pin::new(timeout).poll(cx).is_ready() {
-                            return Poll::Ready(Err(ActixAsyncError::Timeout));
+                            return Poll::Ready(Err(ActixAsyncError::ReceiveTimeout));
                         }
                     }
                     Poll::Pending

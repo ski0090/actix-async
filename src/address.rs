@@ -10,8 +10,9 @@ use crate::message::{
 };
 use crate::request::MessageRequest;
 use crate::runtime::RuntimeService;
-use crate::types::{ActixResult, LocalBoxedFuture};
+use crate::types::ActixResult;
 use crate::util::channel::{oneshot_channel, Sender};
+use crate::util::futures::LocalBoxedFuture;
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
 pub struct Addr<A>(RefCounter<Sender<ActorMessage<A>>>);

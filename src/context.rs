@@ -2,7 +2,6 @@ use core::cell::{Cell, RefCell};
 use core::pin::Pin;
 use core::time::Duration;
 
-use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 use slab::Slab;
 
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
@@ -11,9 +10,8 @@ use crate::handler::Handler;
 use crate::message::{
     ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
-use crate::types::LocalBoxedFuture;
 use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
-use crate::util::futures::cancelable_future;
+use crate::util::futures::{cancelable, join, next, JoinedFutures, LocalBoxedFuture, Stream};
 
 pub struct Context<A> {
     state: Cell<ActorState>,
@@ -139,11 +137,11 @@ impl<A: Actor> Context<A> {
     ///     });
     /// }
     /// ```
-    pub fn add_stream<S, M>(&self, stream: S) -> ContextJoinHandle
+    pub fn add_stream<S>(&self, stream: S) -> ContextJoinHandle
     where
-        S: Stream<Item = M> + 'static,
-        M: Message + 'static,
-        A: Handler<M>,
+        S: Stream + 'static,
+        S::Item: Message + 'static,
+        A: Handler<S::Item>,
     {
         self.stream(stream, ActorMessage::Ref)
     }
@@ -151,20 +149,20 @@ impl<A: Actor> Context<A> {
     /// add a stream to context. multiple stream can be added to one context.
     ///
     /// stream item will be treated as exclusve message and `Handler::handle_wait` will be called.
-    pub fn add_wait_stream<S, M>(&self, stream: S) -> ContextJoinHandle
+    pub fn add_wait_stream<S>(&self, stream: S) -> ContextJoinHandle
     where
-        S: Stream<Item = M> + 'static,
-        M: Message + 'static,
-        A: Handler<M>,
+        S: Stream + 'static,
+        S::Item: Message + 'static,
+        A: Handler<S::Item>,
     {
         self.stream(stream, ActorMessage::Mut)
     }
 
-    fn stream<S, M, F>(&self, stream: S, f: F) -> ContextJoinHandle
+    fn stream<S, F>(&self, stream: S, f: F) -> ContextJoinHandle
     where
-        S: Stream<Item = M> + 'static,
-        M: Message + 'static,
-        A: Handler<M>,
+        S: Stream + 'static,
+        S::Item: Message + 'static,
+        A: Handler<S::Item>,
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy + 'static,
     {
         let weak_tx = self.tx.clone();
@@ -175,7 +173,7 @@ impl<A: Actor> Context<A> {
             // stream is owned by async task and never moved. The loop would borrow pinned stream
             // with `Next`.
             let mut stream = unsafe { Pin::new_unchecked(&mut stream) };
-            while let Some(msg) = stream.next().await {
+            while let Some(msg) = next(&mut stream).await {
                 let msg = MessageObject::new(msg, None);
                 if weak_tx._send(f(msg)).await.is_err() {
                     return;
@@ -183,7 +181,7 @@ impl<A: Actor> Context<A> {
             }
         };
 
-        let (fut, handle) = cancelable_future(fut, async {});
+        let (fut, handle) = cancelable(fut, async {});
 
         A::spawn(fut);
 
@@ -216,7 +214,7 @@ impl<A: Actor> Context<A> {
                 .await;
         };
 
-        let (fut, handle) = cancelable_future(fut, on_cancel);
+        let (fut, handle) = cancelable(fut, on_cancel);
 
         A::spawn(fut);
 
@@ -237,7 +235,7 @@ impl<A: Actor> Context<A> {
             let _ = weak_tx._send(ActorMessage::DelayTokenCancel(token)).await;
         };
 
-        let (fut, handle) = cancelable_future(fut, on_cancel);
+        let (fut, handle) = cancelable(fut, on_cancel);
 
         A::spawn(fut);
 
@@ -248,13 +246,13 @@ impl<A: Actor> Context<A> {
         &self,
         actor: &A,
         cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut ContextFutures,
+        fut: &mut JoinedFutures,
     ) {
         if !cache_ref.is_empty() {
             cache_ref.iter_mut().for_each(|m| {
                 // SAFETY:
-                // `ContextFutures` is an alias type for `FuturesUnordered`. It can not tied to
-                // actor and context's lifetime.
+                // `JoinedFutures` is an alias type for `Vec<LocalBoxedFuture<'static, ()>>`.
+                // It can not tie to actor and context's lifetime.
                 // It has no idea the futures are all resolved in this scope and would assume
                 // the boxed futures would live as long as the actor and context.
                 // Making it impossible to mutably borrow them from this point forward.
@@ -267,14 +265,12 @@ impl<A: Actor> Context<A> {
                 fut.push(m);
             });
 
-            // drain the unordered future before going on.
-            while fut.next().await.is_some() {}
+            // resolve all futures.
+            join(fut).await;
 
             // clear the cache as they are all finished.
             cache_ref.clear();
         }
-
-        debug_assert!(fut.next().await.is_none());
     }
 
     async fn handle_exclusive(
@@ -283,7 +279,7 @@ impl<A: Actor> Context<A> {
         actor: &mut A,
         cache_mut: &mut Option<MessageObject<A>>,
         cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut ContextFutures,
+        fut: &mut JoinedFutures,
     ) {
         // put message in cache in case thread panic before it's handled
         *cache_mut = Some(msg);
@@ -314,7 +310,7 @@ impl<A: Actor> Context<A> {
         actor: &mut A,
         cache_mut: &mut Option<MessageObject<A>>,
         cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut ContextFutures,
+        fut: &mut JoinedFutures,
         drop_notify: &mut Option<OneshotSender<()>>,
     ) -> bool {
         match msg {
@@ -363,7 +359,7 @@ impl<A: Actor> Context<A> {
         actor: &mut A,
         cache_mut: &mut Option<MessageObject<A>>,
         cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut ContextFutures,
+        fut: &mut JoinedFutures,
     ) {
         match msg {
             ActorMessage::Ref(msg) => cache_ref.push(msg),
@@ -384,8 +380,6 @@ pub(crate) struct ContextWithActor<A: Actor> {
     drop_notify: Option<OneshotSender<()>>,
 }
 
-type ContextFutures = FuturesUnordered<LocalBoxedFuture<'static, ()>>;
-
 impl<A: Actor> Default for ContextWithActor<A> {
     fn default() -> Self {
         Self {
@@ -403,7 +397,7 @@ impl<A: Actor> Drop for ContextWithActor<A> {
         // recovery from thread panic.
         if std::thread::panicking() && self.ctx.as_ref().unwrap().state.get() == ActorState::Running
         {
-            let mut ctx = std::mem::take(self);
+            let mut ctx = core::mem::take(self);
             // some of the cached message object may gone. remove them.
             ctx.cache_ref.retain(|m| !m.is_taken());
 
@@ -444,7 +438,7 @@ impl<A: Actor> ContextWithActor<A> {
         let cache_ref = &mut self.cache_ref;
         let drop_notify = &mut self.drop_notify;
 
-        let fut = &mut FuturesUnordered::new();
+        let fut = &mut JoinedFutures::with_capacity(CHANNEL_CAP);
 
         // if there is cached message it must be dealt with
         ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;

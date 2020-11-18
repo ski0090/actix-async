@@ -75,7 +75,7 @@ pub mod prelude {
     #[cfg(feature = "actix-rt")]
     pub use crate::runtime::default_rt::ActixRuntime;
     pub use crate::runtime::RuntimeService;
-    pub use crate::types::LocalBoxedFuture;
+    pub use crate::util::futures::LocalBoxedFuture;
 }
 pub mod request;
 pub mod runtime;
@@ -93,8 +93,9 @@ mod test {
     use actix_rt::Arbiter;
     use async_trait::async_trait;
 
+    use super::context::ContextJoinHandle;
+    use super::message;
     use super::prelude::*;
-    use crate::context::ContextJoinHandle;
 
     #[actix_rt::test]
     async fn start_in_arbiter() {
@@ -154,7 +155,7 @@ mod test {
             .timeout_response(Duration::from_secs(1))
             .await;
 
-        assert!(res.is_err());
+        assert_eq!(res, Err(ActixAsyncError::ReceiveTimeout));
     }
 
     #[actix_rt::test]
@@ -280,9 +281,7 @@ mod test {
 
     struct TestMessage;
 
-    impl Message for TestMessage {
-        type Result = usize;
-    }
+    message!(TestMessage, usize);
 
     #[async_trait(?Send)]
     impl Handler<TestMessage> for TestActor {
@@ -297,9 +296,7 @@ mod test {
 
     struct TestIntervalMessage;
 
-    impl Message for TestIntervalMessage {
-        type Result = (Arc<AtomicUsize>, ContextJoinHandle);
-    }
+    message!(TestIntervalMessage, (Arc<AtomicUsize>, ContextJoinHandle));
 
     #[async_trait(?Send)]
     impl Handler<TestIntervalMessage> for TestActor {
@@ -342,9 +339,7 @@ mod test {
 
     struct TestTimeoutMessage;
 
-    impl Message for TestTimeoutMessage {
-        type Result = ();
-    }
+    message!(TestTimeoutMessage, ());
 
     #[async_trait(?Send)]
     impl Handler<TestTimeoutMessage> for TestActor {

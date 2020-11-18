@@ -12,7 +12,7 @@ name = "closure"
 path = "./examples/closure.rs"
 
 [dependencies]
-futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
+futures-core = { version = "0.3.8", default-features = false }
 pin-project-lite = "0.2"
 slab = "0.4.2"
 tokio = { version = "0.3.3", default-features = false, features = ["sync"] }
@@ -22,3 +22,4 @@ actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-
 [dev-dependencies]
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.41"
+futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
