@@ -43,7 +43,7 @@ impl<A: Actor> Addr<A> {
         M: Message + Send,
         A: Handler<M>,
     {
-        self._send(msg, ActorMessage::Ref)
+        self.send_inner(msg, ActorMessage::Ref)
     }
 
     /// send an exclusive message to actor. `Handler::handle_wait` will be called for exclusive
@@ -57,7 +57,7 @@ impl<A: Actor> Addr<A> {
         M: Message + Send,
         A: Handler<M>,
     {
-        self._send(msg, ActorMessage::Mut)
+        self.send_inner(msg, ActorMessage::Mut)
     }
 
     /// send a concurrent closure to actor. `Handler::handle` will be called for concurrent message
@@ -72,8 +72,7 @@ impl<A: Actor> Addr<A> {
         R: Send + 'static,
     {
         let msg = FunctionMessage::new(func);
-
-        self._send(msg, ActorMessage::Ref)
+        self.send_inner(msg, ActorMessage::Ref)
     }
 
     /// send a exclusive closure to actor. `Handler::handle_wait` will be called for exclusive
@@ -90,8 +89,7 @@ impl<A: Actor> Addr<A> {
         R: Send + 'static,
     {
         let msg = FunctionMutMessage::new(func);
-
-        self._send(msg, ActorMessage::Mut)
+        self.send_inner(msg, ActorMessage::Mut)
     }
 
     /// send a message to actor and ignore the result.
@@ -100,7 +98,7 @@ impl<A: Actor> Addr<A> {
         M: Message + Send,
         A: Handler<M>,
     {
-        self._do_send(msg, ActorMessage::Ref);
+        self.do_send_inner(msg, ActorMessage::Ref);
     }
 
     /// send a exclusive message to actor and ignore the result.
@@ -109,7 +107,7 @@ impl<A: Actor> Addr<A> {
         M: Message + Send,
         A: Handler<M>,
     {
-        self._do_send(msg, ActorMessage::Mut);
+        self.do_send_inner(msg, ActorMessage::Mut);
     }
 
     /// stop actor.
@@ -127,15 +125,7 @@ impl<A: Actor> Addr<A> {
 
         let (tx, rx) = oneshot_channel();
 
-        MessageRequest::new(
-            async move {
-                self.deref()
-                    .send(ActorMessage::ActorState(state, Some(tx)))
-                    .await?;
-                Ok(())
-            },
-            rx,
-        )
+        MessageRequest::new(self._send(ActorMessage::ActorState(state, Some(tx))), rx)
     }
 
     /// weak version of Addr that can be upgraded.
@@ -168,7 +158,7 @@ impl<A: Actor> Addr<A> {
         Self(RefCounter::new(tx))
     }
 
-    fn _send<M, F>(
+    fn send_inner<M, F>(
         &self,
         msg: M,
         f: F,
@@ -178,24 +168,25 @@ impl<A: Actor> Addr<A> {
         A: Handler<M>,
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + 'static,
     {
-        send_with_async_closure(msg, |obj| async move {
-            self.deref().send(f(obj)).await?;
-            Ok(())
-        })
+        send_with_async_closure(msg, |obj| self._send(f(obj)))
     }
 
-    fn _do_send<M, F>(&self, msg: M, f: F)
+    fn do_send_inner<M, F>(&self, msg: M, f: F)
     where
         M: Message + Send,
         A: Handler<M>,
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + 'static,
     {
+        message_send_check::<M>();
         let this = self.clone();
         A::spawn(async move {
-            message_send_check::<M>();
             let msg = MessageObject::new(msg, None);
-            let _ = this.deref().send(f(msg)).await;
+            let _ = this._send(f(msg)).await;
         });
+    }
+
+    async fn _send(&self, msg: ActorMessage<A>) -> ActixResult<()> {
+        self.deref().send(msg).await.map_err(Into::into)
     }
 }
 
@@ -205,9 +196,8 @@ where
     A: Handler<M>,
     F: FnOnce(MessageObject<A>) -> Fut,
 {
-    let (tx, rx) = oneshot_channel();
-
     message_send_check::<M>();
+    let (tx, rx) = oneshot_channel();
     let msg = MessageObject::new(msg, Some(tx));
     MessageRequest::new(f(msg), rx)
 }
@@ -230,11 +220,8 @@ impl<A: Actor> WeakAddr<A> {
     pub(crate) async fn _send(&self, msg: ActorMessage<A>) -> ActixResult<()> {
         self.upgrade()
             .ok_or(ActixAsyncError::Closed)?
-            .deref()
-            .send(msg)
-            .await?;
-
-        Ok(())
+            ._send(msg)
+            .await
     }
 }
 
@@ -263,24 +250,14 @@ where
         &self,
         msg: M,
     ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
-        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
-            Box::pin(async move {
-                self.deref().send(ActorMessage::Ref(obj)).await?;
-                Ok(())
-            })
-        })
+        send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Ref(obj))) as _)
     }
 
     fn wait(
         &self,
         msg: M,
     ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
-        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
-            Box::pin(async move {
-                self.deref().send(ActorMessage::Mut(obj)).await?;
-                Ok(())
-            })
-        })
+        send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Mut(obj))) as _)
     }
 
     fn do_send(&self, msg: M) {
@@ -301,18 +278,14 @@ where
         &self,
         msg: M,
     ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
-        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
-            Box::pin(self._send(ActorMessage::Ref(obj)))
-        })
+        send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Ref(obj))) as _)
     }
 
     fn wait(
         &self,
         msg: M,
     ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
-        send_with_async_closure::<_, _, _, LocalBoxedFuture<'_, ActixResult<()>>>(msg, |obj| {
-            Box::pin(self._send(ActorMessage::Mut(obj)))
-        })
+        send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Mut(obj))) as _)
     }
 
     /// `AddrHandler::do_send` will panic if the `Addr` for `RecipientWeak` is gone.

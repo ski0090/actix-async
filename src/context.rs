@@ -101,6 +101,11 @@ impl<A: Actor> Context<A> {
         self.state.set(ActorState::StopGraceful);
     }
 
+    fn stop_mut(&mut self) {
+        self.rx.get_mut().close();
+        self.state.set(ActorState::StopGraceful);
+    }
+
     /// get the address of actor from context.
     pub fn address(&self) -> Option<Addr<A>> {
         self.tx.upgrade()
@@ -316,9 +321,7 @@ impl<A: Actor> Context<A> {
         drop_notify: &mut Option<OneshotSender<()>>,
     ) -> bool {
         match msg {
-            // have concurrent message.
             ActorMessage::Ref(msg) => cache_ref.push(msg),
-            // have exclusive messages.
             ActorMessage::Mut(msg) => {
                 self.handle_exclusive(msg, actor, cache_mut, cache_ref, fut)
                     .await
@@ -334,7 +337,7 @@ impl<A: Actor> Context<A> {
             }
             ActorMessage::IntervalToken(token) => {
                 let msg = match self.interval_queue.get_mut().get(token) {
-                    Some(msg) => msg.clone_actor_message(),
+                    Some(msg) => msg.clone_message(),
                     None => return false,
                 };
                 self.handle_queued_message(msg, actor, cache_mut, cache_ref, fut)
@@ -345,7 +348,7 @@ impl<A: Actor> Context<A> {
             ActorMessage::ActorState(state, notify) => {
                 *drop_notify = notify;
                 if state != ActorState::Running {
-                    self.stop();
+                    self.stop_mut();
                 };
 
                 return state == ActorState::Stop;
@@ -482,7 +485,7 @@ impl<A: Actor> ContextWithActor<A> {
                 }
                 Err(TryRecvError::Closed) => {
                     // channel is closed. stop the context.
-                    ctx.stop();
+                    ctx.stop_mut();
                     // try to handle concurrent messages from previous iters.
                     ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;
 

@@ -86,7 +86,7 @@ pub(crate) enum IntervalMessage<A> {
 }
 
 impl<A: Actor> IntervalMessage<A> {
-    pub(crate) fn clone_actor_message(&self) -> ActorMessage<A> {
+    pub(crate) fn clone_message(&self) -> ActorMessage<A> {
         match self {
             Self::Ref(ref obj) => ActorMessage::Ref(obj.clone_object()),
             Self::Mut(ref obj) => ActorMessage::Mut(obj.clone_object()),

@@ -103,7 +103,16 @@ impl Future for Join<'_> {
         let mut i = 0;
         while i < this.fut.len() {
             if this.fut[i].as_mut().poll(cx).is_ready() {
-                this.fut.swap_remove(i);
+                // SAFETY:
+                // Vec::swap_remove with no len check and drop of removed element in place.
+                // i is guaranteed to be smaller than this.fut.len()
+                unsafe {
+                    let len = this.fut.len();
+                    let mut last = core::ptr::read(this.fut.as_ptr().add(len - 1));
+                    let hole = this.fut.as_mut_ptr().add(i);
+                    this.fut.set_len(len - 1);
+                    core::mem::swap(&mut *hole, &mut last);
+                }
             } else {
                 i += 1;
             }

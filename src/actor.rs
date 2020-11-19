@@ -16,7 +16,6 @@ pub trait Actor: Sized + 'static {
     type Runtime: RuntimeService;
 
     /// async hook before actor start to run.
-    #[allow(unused_variables)]
     fn on_start<'act, 'ctx, 'res>(
         &'act mut self,
         ctx: &'ctx mut Context<Self>,
@@ -26,11 +25,12 @@ pub trait Actor: Sized + 'static {
         'ctx: 'res,
         Self: 'res,
     {
-        Box::pin(async {})
+        Box::pin(async move {
+            let _ = ctx;
+        })
     }
 
     /// async hook before actor stops
-    #[allow(unused_variables)]
     fn on_stop<'act, 'ctx, 'res>(
         &'act mut self,
         ctx: &'ctx mut Context<Self>,
@@ -40,7 +40,9 @@ pub trait Actor: Sized + 'static {
         'ctx: 'res,
         Self: 'res,
     {
-        Box::pin(async {})
+        Box::pin(async move {
+            let _ = ctx;
+        })
     }
 
     /// start the actor on current thread and return it's address
@@ -83,7 +85,7 @@ pub trait Actor: Sized + 'static {
     ///         async {
     ///             // run async code
     ///             actix_rt::time::sleep(Duration::from_secs(1)).await;
-    ///             // return a instance of actor.
+    ///             // return an instance of actor.
     ///             TestActor
     ///         }   
     ///     });
