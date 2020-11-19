@@ -1,5 +1,8 @@
 [actix](https://crates.io/crates/actix) API(mostly) with async/await friendly.
 
+### Requirement:
+- MSRV: rustc 1.48 and above
+
 ### Example:
 ```rust
 use actix_async::prelude::*;
