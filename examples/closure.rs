@@ -1,14 +1,13 @@
 use std::time::Duration;
 
+use actix_async::actor;
 use actix_async::prelude::*;
 use futures_util::FutureExt;
 
 struct ClosureActor(usize);
 
 // impl actor trait.
-impl Actor for ClosureActor {
-    type Runtime = ActixRuntime;
-}
+actor!(ClosureActor);
 
 // impl methods that take in self and/or actor's context.
 impl ClosureActor {

@@ -94,10 +94,8 @@ impl<A: Actor> Context<A> {
         self.later(dur, ActorMessage::Mut(msg))
     }
 
-    /// stop the context. It would end the actor gracefully by draining all remaining message in
-    /// queue.
-    ///
-    /// *. It DOES NOT drain the channel.
+    /// stop the context. It would end the actor gracefully by close the channel draining all
+    /// remaining messages.
     pub fn stop(&self) {
         self.rx.borrow_mut().close();
         self.state.set(ActorState::StopGraceful);
@@ -197,8 +195,7 @@ impl<A: Actor> Context<A> {
         let token = self.interval_queue.borrow_mut().insert(msg);
 
         let weak_tx = self.tx.clone();
-
-        let weak_tx1 = weak_tx.clone();
+        let weak_tx1 = self.tx.clone();
 
         let fut = async move {
             loop {
@@ -228,9 +225,10 @@ impl<A: Actor> Context<A> {
 
     fn later(&self, dur: Duration, msg: ActorMessage<A>) -> ContextJoinHandle {
         let token = self.delay_queue.borrow_mut().insert(msg);
-        let weak_tx = self.tx.clone();
 
-        let weak_tx1 = weak_tx.clone();
+        let weak_tx = self.tx.clone();
+        let weak_tx1 = self.tx.clone();
+
         let fut = async move {
             A::sleep(dur).await;
             let _ = weak_tx1._send(ActorMessage::DelayToken(token)).await;
@@ -256,7 +254,7 @@ impl<A: Actor> Context<A> {
         if !cache_ref.is_empty() {
             cache_ref.iter_mut().for_each(|m| {
                 // SAFETY:
-                // `JoinedFutures` is an alias type for `Vec<LocalBoxedFuture<'static, ()>>`.
+                // `JoinedFutures` is an alias type for `Vec<LocalBoxedFuture<'a, ()>>`.
                 // It can not tie to actor and context's lifetime.
                 // It has no idea the futures are all resolved in this scope and would assume
                 // the boxed futures would live as long as the actor and context.
@@ -264,10 +262,7 @@ impl<A: Actor> Context<A> {
                 //
                 // All futures transmuted to static lifetime must resolved before exiting
                 // try_handle_concurrent method.
-                let m: LocalBoxedFuture<'static, ()> =
-                    unsafe { std::mem::transmute(m.handle(actor, self)) };
-
-                fut.push(m);
+                fut.push(unsafe { std::mem::transmute(m.handle(actor, self)) });
             });
 
             // resolve all futures.
@@ -276,6 +271,8 @@ impl<A: Actor> Context<A> {
             // clear the cache as they are all finished.
             cache_ref.clear();
         }
+
+        debug_assert!(fut.is_empty());
     }
 
     async fn handle_exclusive(

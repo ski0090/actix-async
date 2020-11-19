@@ -3,6 +3,8 @@ use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
 
+use pin_project_lite::pin_project;
+
 use crate::error::ActixAsyncError;
 use crate::runtime::RuntimeService;
 use crate::types::ActixResult;
@@ -11,7 +13,7 @@ use crate::util::channel::OneshotReceiver;
 /// default timeout for sending message
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-pin_project_lite::pin_project! {
+pin_project! {
     /// Message request to actor with timeout setting.
     pub struct MessageRequest<RT, Fut, Res>
     where
@@ -22,8 +24,8 @@ pin_project_lite::pin_project! {
     }
 }
 
-pin_project_lite::pin_project! {
-    #[project = StateProj]
+pin_project! {
+    #[project = MessageRequestStateProj]
     enum MessageRequestState<RT, Fut, Res>
     where
         RT: RuntimeService
@@ -42,8 +44,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-const TIMEOUT_CONFIGURABLE: &'static str =
-    "Timeout is not configurable after Request Future is polled";
+const TIMEOUT_CONFIGURABLE: &str = "Timeout is not configurable after Request Future is polled";
 
 impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     pub(crate) fn new(fut: Fut, rx: OneshotReceiver<Res>) -> Self {
@@ -110,7 +111,7 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            StateProj::Request {
+            MessageRequestStateProj::Request {
                 fut,
                 rx,
                 timeout,
@@ -132,7 +133,7 @@ where
                     Poll::Pending => Poll::Pending,
                 },
             },
-            StateProj::Response {
+            MessageRequestStateProj::Response {
                 rx,
                 timeout_response,
             } => match Pin::new(rx).poll(cx) {

@@ -116,7 +116,7 @@ pub mod default_rt {
         type Sleep = time::Sleep;
 
         #[inline]
-        fn spawn<F: Future<Output = ()> + 'static>(f: F) {
+        fn spawn<F: Future + 'static>(f: F) {
             spawn_local(f);
         }
 

@@ -56,8 +56,7 @@ where
     ) -> LocalBoxedFuture<'res, M::Result>
     where
         'act: 'res,
-        'ctx: 'res,
-        Self: 'res;
+        'ctx: 'res;
 
     /// exclusive handler. `Actor` and `Context` are borrowed mutably so only one message can be
     /// handle at any given time. `Actor` would block on this method until it's finished.
@@ -69,7 +68,6 @@ where
     where
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         // fall back to handle by default
         self.handle(msg, ctx)
@@ -90,7 +88,6 @@ where
     where
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         (msg.func)(self, ctx)
     }
@@ -110,7 +107,6 @@ where
     where
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         unreachable!("Handler::handle can not be called on FunctionMutMessage");
     }
@@ -123,7 +119,6 @@ where
     where
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         (msg.func)(self, ctx)
     }
@@ -138,8 +133,7 @@ pub trait MessageHandler<A: Actor> {
     where
         'msg: 'res,
         'act: 'res,
-        'ctx: 'res,
-        Self: 'res;
+        'ctx: 'res;
 
     fn handle_wait<'msg, 'act, 'ctx, 'res>(
         &'msg mut self,
@@ -149,8 +143,7 @@ pub trait MessageHandler<A: Actor> {
     where
         'msg: 'res,
         'act: 'res,
-        'ctx: 'res,
-        Self: 'res;
+        'ctx: 'res;
 
     fn is_taken(&self) -> bool;
 }
@@ -169,20 +162,18 @@ where
         'msg: 'res,
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         Box::pin(async move {
-            if let Some(msg) = self.msg.take() {
-                match self.tx.take() {
-                    Some(tx) => {
-                        if !tx.is_closed() {
-                            let res = act.handle(msg, ctx).await;
-                            let _ = tx.send(res);
-                        }
+            let msg = self.msg.take().unwrap();
+            match self.tx.take() {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = act.handle(msg, ctx).await;
+                        let _ = tx.send(res);
                     }
-                    None => {
-                        let _ = act.handle(msg, ctx).await;
-                    }
+                }
+                None => {
+                    let _ = act.handle(msg, ctx).await;
                 }
             }
         })
@@ -197,20 +188,18 @@ where
         'msg: 'res,
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         Box::pin(async move {
-            if let Some(msg) = self.msg.take() {
-                match self.tx.take() {
-                    Some(tx) => {
-                        if !tx.is_closed() {
-                            let res = act.handle_wait(msg, ctx).await;
-                            let _ = tx.send(res);
-                        }
+            let msg = self.msg.take().unwrap();
+            match self.tx.take() {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = act.handle_wait(msg, ctx).await;
+                        let _ = tx.send(res);
                     }
-                    None => {
-                        let _ = act.handle_wait(msg, ctx).await;
-                    }
+                }
+                None => {
+                    let _ = act.handle_wait(msg, ctx).await;
                 }
             }
         })
