@@ -138,12 +138,12 @@ mod test {
         let addr = TestActor::default().start();
 
         let (size, handle) = addr.send(TestIntervalMessage).await.unwrap();
-        sleep(Duration::from_millis(1600)).await;
+        sleep(Duration::from_millis(1800)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3);
 
         let (size, handle) = addr.wait(TestIntervalMessage).await.unwrap();
-        sleep(Duration::from_millis(1600)).await;
+        sleep(Duration::from_millis(1800)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3)
     }

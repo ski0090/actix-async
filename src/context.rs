@@ -251,7 +251,7 @@ impl<A: Actor> Context<A> {
     }
 
     async fn try_handle_concurrent(
-        &self,
+        &mut self,
         actor: &A,
         cache_ref: &mut Vec<MessageObject<A>>,
         fut: &mut JoinedFutures,
