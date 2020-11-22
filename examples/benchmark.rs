@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
@@ -33,8 +33,6 @@ mod actix_async_actor {
     pub use tokio::fs::File;
     pub use tokio::io::AsyncReadExt;
 
-    use actix_async::{actor, message};
-
     use super::*;
 
     pub struct ActixAsyncActor {
@@ -65,13 +63,13 @@ mod actix_actor {
     pub use std::cell::RefCell;
     pub use std::rc::Rc;
 
+    pub use actix::prelude::*;
     pub use tokio02::fs::File;
     pub use tokio02::io::AsyncReadExt;
 
-    use actix::prelude::*;
+    use std::ops::DerefMut;
 
     use super::*;
-    use std::ops::DerefMut;
 
     pub struct ActixActor {
         pub file: Rc<RefCell<File>>,
@@ -132,37 +130,32 @@ fn collect_arg(target: &mut String, rounds: &mut usize, heap_alloc: &mut bool) -
         })
         .unwrap_or_else(|| String::from("./sample/sample.txt"));
 
-    loop {
-        if let Some(arg) = iter.next() {
-            if arg.as_str() == "--target" {
-                if let Some(arg) = iter.next() {
-                    *target = arg;
-                }
+    while let Some(arg) = iter.next() {
+        if arg.as_str() == "--target" {
+            if let Some(arg) = iter.next() {
+                *target = arg;
             }
-            if arg.as_str() == "--rounds" {
-                if let Some(arg) = iter.next() {
-                    if let Ok(r) = arg.parse::<usize>() {
-                        *rounds = r;
-                    }
-                }
-            }
-            if arg.as_str() == "--heap-alloc" {
-                if let Some(arg) = iter.next() {
-                    if let Ok(use_heap) = arg.parse::<bool>() {
-                        *heap_alloc = use_heap;
-                    }
-                }
-            }
-            continue;
         }
-        break;
+        if arg.as_str() == "--rounds" {
+            if let Some(arg) = iter.next() {
+                if let Ok(r) = arg.parse::<usize>() {
+                    *rounds = r;
+                }
+            }
+        }
+        if arg.as_str() == "--heap-alloc" {
+            if let Some(arg) = iter.next() {
+                if let Ok(use_heap) = arg.parse::<bool>() {
+                    *heap_alloc = use_heap;
+                }
+            }
+        }
     }
 
     file_path
 }
 
 fn main() {
-    let num = num_cpus::get();
     let mut target = String::from("actix-async");
     let mut rounds = 1000;
     let mut heap_alloc = false;
@@ -172,31 +165,21 @@ fn main() {
     match target.as_str() {
         "actix-async" => {
             use actix_async_actor::*;
-            actix_rt::System::new("actix-async").block_on(async {
+            actix_rt::System::new("actix-async").block_on(async move {
                 println!("starting benchmark actix-async");
 
-                let addrs = (0..num)
-                    .map(|_| {
-                        let arbiter = &Arbiter::new();
-                        let file_path = file_path.clone();
-                        ActixAsyncActor::start_async_in_arbiter(arbiter, move |_| async move {
-                            let file = File::open(file_path.as_str()).await.unwrap();
-                            ActixAsyncActor { file, heap_alloc }
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                let addr = ActixAsyncActor::create_async(move |_| async move {
+                    let file = File::open(file_path.as_str()).await.unwrap();
+                    ActixAsyncActor { file, heap_alloc }
+                });
 
                 let mut exclusives = FuturesUnordered::new();
                 let mut concurrents = FuturesUnordered::new();
 
-                addrs.iter().for_each(|addr| {
-                    for _ in 0..rounds {
-                        exclusives.push(addr.wait(ExclusiveMessage));
-                        concurrents.push(addr.send(ExclusiveMessage));
-                    }
-                });
-
-                actix_rt::time::sleep(Duration::from_secs(1)).await;
+                for _ in 0..rounds {
+                    exclusives.push(addr.wait(ExclusiveMessage));
+                    concurrents.push(addr.send(ExclusiveMessage));
+                }
 
                 let start = Instant::now();
                 while exclusives.next().await.is_some() {}
@@ -219,23 +202,19 @@ fn main() {
 
                 use actix_actor::*;
 
+                let file = File::open(file_path.clone()).await.unwrap();
+                let heap_alloc = heap_alloc;
+                let addr = ActixActor::create(move |_| ActixActor {
+                    file: Rc::new(RefCell::new(file)),
+                    heap_alloc,
+                });
+
                 let mut exclusives = FuturesUnordered::new();
                 let mut concurrents = FuturesUnordered::new();
 
-                for _ in 0..num {
-                    let file = File::open(file_path.clone()).await.unwrap();
-                    let heap_alloc = heap_alloc;
-                    let arb = actix::Arbiter::new();
-                    use actix::Actor;
-                    let addr = ActixActor::start_in_arbiter(&arb, move |_| ActixActor {
-                        file: Rc::new(RefCell::new(file)),
-                        heap_alloc,
-                    });
-
-                    for _ in 0..rounds {
-                        exclusives.push(addr.send(ExclusiveMessage));
-                        concurrents.push(addr.send(ConcurrentMessage));
-                    }
+                for _ in 0..rounds {
+                    exclusives.push(addr.send(ExclusiveMessage));
+                    concurrents.push(addr.send(ConcurrentMessage));
                 }
 
                 let start = Instant::now();

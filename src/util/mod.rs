@@ -1,9 +1,8 @@
 pub(crate) mod channel {
-    pub(crate) use tokio::sync::mpsc::error::{SendError, TryRecvError};
-    pub(crate) use tokio::sync::mpsc::{channel, Receiver, Sender};
-    pub(crate) use tokio::sync::oneshot::error::RecvError as OneshotRecvError;
-    pub(crate) use tokio::sync::oneshot::{
-        channel as oneshot_channel, Receiver as OneshotReceiver, Sender as OneshotSender,
+    pub(crate) use async_channel::{bounded as channel, Receiver, SendError, Sender, TryRecvError};
+    pub(crate) use async_oneshot::{
+        oneshot as oneshot_channel, Closed as OneshotRecvError, Receiver as OneshotReceiver,
+        Sender as OneshotSender,
     };
 }
 

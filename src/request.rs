@@ -15,18 +15,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pin_project! {
     /// Message request to actor with timeout setting.
-    pub struct MessageRequest<RT, Fut, Res>
-    where
-        RT: RuntimeService
-    {
-        #[pin]
-        state: MessageRequestState<RT, Fut, Res>
-    }
-}
-
-pin_project! {
-    #[project = MessageRequestStateProj]
-    enum MessageRequestState<RT, Fut, Res>
+    #[project = MessageRequestProj]
+    pub enum MessageRequest<RT, Fut, Res>
     where
         RT: RuntimeService
     {
@@ -48,13 +38,11 @@ const TIMEOUT_CONFIGURABLE: &str = "Timeout is not configurable after Request Fu
 
 impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     pub(crate) fn new(fut: Fut, rx: OneshotReceiver<Res>) -> Self {
-        Self {
-            state: MessageRequestState::Request {
-                fut,
-                rx: Some(rx),
-                timeout: RT::sleep(DEFAULT_TIMEOUT),
-                timeout_response: None,
-            },
+        MessageRequest::Request {
+            fut,
+            rx: Some(rx),
+            timeout: RT::sleep(DEFAULT_TIMEOUT),
+            timeout_response: None,
         }
     }
 
@@ -62,19 +50,17 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     ///
     /// Default to 10 seconds.
     pub fn timeout(self, dur: Duration) -> Self {
-        match self.state {
-            MessageRequestState::Request {
+        match self {
+            MessageRequest::Request {
                 fut,
                 rx,
                 timeout_response,
                 ..
-            } => Self {
-                state: MessageRequestState::Request {
-                    fut,
-                    rx,
-                    timeout: RT::sleep(dur),
-                    timeout_response,
-                },
+            } => MessageRequest::Request {
+                fut,
+                rx,
+                timeout: RT::sleep(dur),
+                timeout_response,
             },
             _ => unreachable!(TIMEOUT_CONFIGURABLE),
         }
@@ -84,16 +70,14 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     ///
     /// Default to no timeout.
     pub fn timeout_response(self, dur: Duration) -> Self {
-        match self.state {
-            MessageRequestState::Request {
+        match self {
+            MessageRequest::Request {
                 fut, rx, timeout, ..
-            } => Self {
-                state: MessageRequestState::Request {
-                    fut,
-                    rx,
-                    timeout,
-                    timeout_response: Some(RT::sleep(dur)),
-                },
+            } => MessageRequest::Request {
+                fut,
+                rx,
+                timeout,
+                timeout_response: Some(RT::sleep(dur)),
             },
             _ => unreachable!(TIMEOUT_CONFIGURABLE),
         }
@@ -108,10 +92,8 @@ where
     type Output = ActixResult<Res>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-
-        match this.state.as_mut().project() {
-            MessageRequestStateProj::Request {
+        match self.as_mut().project() {
+            MessageRequestProj::Request {
                 fut,
                 rx,
                 timeout,
@@ -121,7 +103,7 @@ where
                     let rx = rx.take().unwrap();
                     let timeout_response = timeout_response.take();
 
-                    this.state.set(MessageRequestState::Response {
+                    self.set(MessageRequest::Response {
                         rx,
                         timeout_response,
                     });
@@ -133,7 +115,7 @@ where
                     Poll::Pending => Poll::Pending,
                 },
             },
-            MessageRequestStateProj::Response {
+            MessageRequestProj::Response {
                 rx,
                 timeout_response,
             } => match Pin::new(rx).poll(cx) {

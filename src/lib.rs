@@ -6,19 +6,13 @@
 //!
 //! // actor type
 //! struct TestActor;
-//!
 //! // impl actor trait for actor type
-//! impl Actor for TestActor {
-//!     type Runtime = ActixRuntime;
-//! }
+//! actor!(TestActor);
 //!
 //! // message type
 //! struct TestMessage;
-//!
-//! // impl message trait for message type.
-//! impl Message for TestMessage {
-//!     type Result = u32;
-//! }
+//! // impl message trait for message type and define the result type.
+//! message!(TestMessage, u32);
 //!
 //! // impl handler trait for message and actor types.
 //! #[async_trait::async_trait(?Send)]
@@ -58,6 +52,7 @@
 
 mod actor;
 mod handler;
+mod macros;
 mod message;
 mod types;
 mod util;
@@ -65,14 +60,16 @@ mod util;
 pub mod address;
 pub mod context;
 pub mod error;
-pub mod macros;
 pub mod prelude {
+    #[cfg(feature = "actix-rt")]
+    pub use crate::actor;
     pub use crate::actor::Actor;
     pub use crate::address::AddrHandler;
     pub use crate::context::Context;
     pub use crate::context::ContextJoinHandle;
     pub use crate::error::ActixAsyncError;
     pub use crate::handler::Handler;
+    pub use crate::message;
     pub use crate::message::Message;
     #[cfg(feature = "actix-rt")]
     pub use crate::runtime::default_rt::ActixRuntime;
@@ -96,8 +93,6 @@ mod test {
     use async_trait::async_trait;
 
     use crate as actix_async;
-
-    use actix_async::message;
     use actix_async::prelude::*;
 
     #[actix_rt::test]
@@ -138,12 +133,12 @@ mod test {
         let addr = TestActor::default().start();
 
         let (size, handle) = addr.send(TestIntervalMessage).await.unwrap();
-        sleep(Duration::from_millis(1800)).await;
+        sleep(Duration::from_millis(1700)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3);
 
         let (size, handle) = addr.wait(TestIntervalMessage).await.unwrap();
-        sleep(Duration::from_millis(1800)).await;
+        sleep(Duration::from_millis(1700)).await;
         handle.cancel();
         assert_eq!(size.load(Ordering::SeqCst), 3)
     }

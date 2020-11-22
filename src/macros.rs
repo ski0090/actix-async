@@ -1,5 +1,5 @@
-#[cfg(feature = "actix-rt")]
 #[macro_export]
+#[cfg(feature = "actix-rt")]
 macro_rules! actor {
     ($ty: ty) => {
         impl Actor for $ty {

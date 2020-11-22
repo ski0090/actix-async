@@ -36,10 +36,7 @@ use core::time::Duration;
 /// }
 ///
 /// struct TestMessage;
-///
-/// impl Message for TestMessage {
-///     type Result = usize;
-/// }
+/// message!(TestMessage, usize);
 ///
 /// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for AsyncStdActor {
@@ -50,10 +47,7 @@ use core::time::Duration;
 ///
 /// // actor runs on default actix runtime(tokio current thread runtime)
 /// struct TokioActor;
-///
-/// impl Actor for TokioActor {
-///     type Runtime = ActixRuntime;
-/// }
+/// actor!(TokioActor);
 ///
 /// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for TokioActor {
@@ -101,28 +95,23 @@ pub trait RuntimeService: Sized {
 pub mod default_rt {
     use super::*;
 
-    use tokio::runtime::Runtime as TokioRuntime;
-    use tokio::task::{spawn_local, LocalSet};
-    use tokio::time;
-
     /// default runtime(tokio current thread runtime).
     #[allow(dead_code)]
-    pub struct ActixRuntime {
-        rt: TokioRuntime,
-        local: LocalSet,
-    }
+    pub type ActixRuntime = actix_rt::Runtime;
 
     impl RuntimeService for ActixRuntime {
-        type Sleep = time::Sleep;
+        type Sleep = actix_rt::time::Sleep;
 
         #[inline]
         fn spawn<F: Future + 'static>(f: F) {
-            spawn_local(f);
+            actix_rt::spawn(async move {
+                f.await;
+            });
         }
 
         #[inline]
         fn sleep(dur: Duration) -> Self::Sleep {
-            time::sleep(dur)
+            actix_rt::time::sleep(dur)
         }
     }
 }

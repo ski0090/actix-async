@@ -7,13 +7,9 @@ use crate::util::futures::LocalBoxedFuture;
 /// # example:
 /// ```rust:
 /// use actix_async::prelude::*;
-/// use actix_async::message;
 ///
 /// struct TestActor;
-///
-/// impl Actor for TestActor {
-///     type Runtime = ActixRuntime;
-/// }
+/// actor!(TestActor);
 ///
 /// struct TestMessage;
 /// message!(TestMessage, ());
@@ -163,8 +159,8 @@ where
         'act: 'res,
         'ctx: 'res,
     {
+        let msg = self.msg.take().unwrap();
         Box::pin(async move {
-            let msg = self.msg.take().unwrap();
             match self.tx.take() {
                 Some(tx) => {
                     if !tx.is_closed() {
@@ -189,8 +185,8 @@ where
         'act: 'res,
         'ctx: 'res,
     {
+        let msg = self.msg.take().unwrap();
         Box::pin(async move {
-            let msg = self.msg.take().unwrap();
             match self.tx.take() {
                 Some(tx) => {
                     if !tx.is_closed() {

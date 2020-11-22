@@ -22,7 +22,7 @@ pub struct Context<A> {
     interval_queue: RefCell<Slab<IntervalMessage<A>>>,
     delay_queue: RefCell<Slab<ActorMessage<A>>>,
     tx: WeakAddr<A>,
-    rx: RefCell<Receiver<ActorMessage<A>>>,
+    rx: Receiver<ActorMessage<A>>,
 }
 
 /// a join handle can be used to cancel a spawned async task like interval closure and stream
@@ -45,7 +45,7 @@ impl<A: Actor> Context<A> {
             interval_queue: RefCell::new(Slab::with_capacity(8)),
             delay_queue: RefCell::new(Slab::with_capacity(CHANNEL_CAP)),
             tx,
-            rx: RefCell::new(rx),
+            rx,
         }
     }
 
@@ -97,12 +97,7 @@ impl<A: Actor> Context<A> {
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
     pub fn stop(&self) {
-        self.rx.borrow_mut().close();
-        self.state.set(ActorState::StopGraceful);
-    }
-
-    fn stop_mut(&mut self) {
-        self.rx.get_mut().close();
+        self.rx.close();
         self.state.set(ActorState::StopGraceful);
     }
 
@@ -121,16 +116,10 @@ impl<A: Actor> Context<A> {
     /// use futures_util::stream::once;
     ///
     /// struct StreamActor;
-    ///
-    /// impl Actor for StreamActor {
-    ///     type Runtime = ActixRuntime;
-    /// }
+    /// actor!(StreamActor);
     ///
     /// struct StreamMessage;
-    ///
-    /// impl Message for StreamMessage {
-    ///     type Result = ();
-    /// }
+    /// message!(StreamMessage, ());
     ///
     /// #[async_trait::async_trait(?Send)]
     /// impl Handler<StreamMessage> for StreamActor {
@@ -348,7 +337,7 @@ impl<A: Actor> Context<A> {
             ActorMessage::ActorState(state, notify) => {
                 *drop_notify = notify;
                 if state != ActorState::Running {
-                    self.stop_mut();
+                    self.stop();
                 };
 
                 return state == ActorState::Stop;
@@ -454,7 +443,7 @@ impl<A: Actor> ContextWithActor<A> {
 
         // batch receive new messages from channel.
         loop {
-            match ctx.rx.get_mut().try_recv() {
+            match ctx.rx.try_recv() {
                 Ok(msg) => {
                     let is_force_stop = ctx
                         .handle_message(msg, actor, cache_mut, cache_ref, fut, drop_notify)
@@ -464,14 +453,13 @@ impl<A: Actor> ContextWithActor<A> {
                         break;
                     }
                 }
-
                 Err(TryRecvError::Empty) => {
                     // channel is empty. try to handle concurrent messages from previous iters.
                     ctx.try_handle_concurrent(actor, cache_ref, fut).await;
 
                     // block the task and recv one message when channel is empty.
-                    match ctx.rx.get_mut().recv().await {
-                        Some(msg) => {
+                    match ctx.rx.recv().await {
+                        Ok(msg) => {
                             let is_force_stop = ctx
                                 .handle_message(msg, actor, cache_mut, cache_ref, fut, drop_notify)
                                 .await;
@@ -480,12 +468,12 @@ impl<A: Actor> ContextWithActor<A> {
                                 break;
                             }
                         }
-                        None => break,
+                        Err(_) => break,
                     }
                 }
                 Err(TryRecvError::Closed) => {
                     // channel is closed. stop the context.
-                    ctx.stop_mut();
+                    ctx.stop();
                     // try to handle concurrent messages from previous iters.
                     ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;
 

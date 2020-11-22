@@ -35,6 +35,7 @@ impl<A: Actor> Deref for Addr<A> {
 impl<A: Actor> Addr<A> {
     /// send a concurrent message to actor. `Handler::handle` will be called for concurrent message
     /// processing.
+    #[inline]
     pub fn send<M>(
         &self,
         msg: M,
@@ -49,6 +50,7 @@ impl<A: Actor> Addr<A> {
     /// send an exclusive message to actor. `Handler::handle_wait` will be called for exclusive
     /// message processing.
     /// If `Handler::handle_wait` is not override then it would use `Handler::handle` as fallback.
+    #[inline]
     pub fn wait<M>(
         &self,
         msg: M,
@@ -63,6 +65,7 @@ impl<A: Actor> Addr<A> {
     /// send a concurrent closure to actor. `Handler::handle` will be called for concurrent message
     /// processing.
     /// closure must be `Send` bound.
+    #[inline]
     pub fn run<F, R>(
         &self,
         func: F,
@@ -78,6 +81,7 @@ impl<A: Actor> Addr<A> {
     /// send a exclusive closure to actor. `Handler::handle_wait` will be called for exclusive
     /// message processing.
     /// If `Handler::handle_wait` is not override then it would use `Handler::handle` as fallback.
+    #[inline]
     pub fn run_wait<F, R>(
         &self,
         func: F,
