@@ -1,10 +1,13 @@
 use core::future::Future;
 use core::pin::Pin;
-use core::task::{Context, Poll};
+use core::task::{Context as StdContext, Poll};
 
-pub(crate) use futures_core::stream::Stream;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
-use crate::util::channel::{oneshot_channel, OneshotReceiver, OneshotSender};
+pub(crate) use futures_core::Stream;
+
+use crate::util::channel::{oneshot, OneshotReceiver, OneshotSender};
 
 pub type LocalBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -12,7 +15,7 @@ pub(crate) fn cancelable<Fut, FutCancel>(
     fut: Fut,
     on_cancel: FutCancel,
 ) -> (CancelableFuture<Fut, FutCancel>, OneshotSender<()>) {
-    let (tx, rx) = oneshot_channel();
+    let (tx, rx) = oneshot();
 
     let fut = CancelableFuture {
         rx: Some(rx),
@@ -42,7 +45,7 @@ where
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         match this.rx {
@@ -79,7 +82,7 @@ where
 {
     type Output = Option<S::Item>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.get_mut().stream).poll_next(cx)
     }
 }
@@ -95,7 +98,7 @@ pub(crate) struct Join<'a> {
 impl Future for Join<'_> {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         let mut i = 0;

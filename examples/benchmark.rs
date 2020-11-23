@@ -165,7 +165,7 @@ fn main() {
     match target.as_str() {
         "actix-async" => {
             use actix_async_actor::*;
-            actix_rt::System::new("actix-async").block_on(async move {
+            actix_rt::System::new("actix-async").block_on(async {
                 println!("starting benchmark actix-async");
 
                 let addr = ActixAsyncActor::create_async(move |_| async move {

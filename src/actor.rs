@@ -1,6 +1,8 @@
 use core::future::{ready, Future};
 use core::time::Duration;
 
+use alloc::boxed::Box;
+
 use crate::address::{Addr, WeakAddr};
 use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
@@ -23,7 +25,6 @@ pub trait Actor: Sized + 'static {
     where
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         Box::pin(async move {
             let _ = ctx;
@@ -38,7 +39,6 @@ pub trait Actor: Sized + 'static {
     where
         'act: 'res,
         'ctx: 'res,
-        Self: 'res,
     {
         Box::pin(async move {
             let _ = ctx;

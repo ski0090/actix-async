@@ -17,7 +17,6 @@ path = "./examples/closure.rs"
 
 [dependencies]
 async-channel = "1.5.1"
-async-oneshot = "0.4.2"
 futures-core = { version = "0.3.8", default-features = false }
 pin-project-lite = "0.2"
 slab = "0.4.2"
@@ -29,5 +28,5 @@ actix = "0.10.0"
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.41"
 futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
-tokio = { version = "0.3.3", features = ["full"] }
+tokio = { version = "0.3.4", features = ["full"] }
 tokio02 = { package = "tokio", version = "0.2.23", features = ["full"] }

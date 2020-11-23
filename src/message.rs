@@ -1,6 +1,8 @@
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
+use alloc::boxed::Box;
+
 use crate::actor::{Actor, ActorState};
 use crate::handler::{Handler, MessageHandler};
 use crate::util::channel::OneshotSender;

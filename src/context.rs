@@ -2,6 +2,9 @@ use core::cell::{Cell, RefCell};
 use core::pin::Pin;
 use core::time::Duration;
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use slab::Slab;
 
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
@@ -370,17 +373,19 @@ impl<A: Actor> Default for ContextWithActor<A> {
 
 impl<A: Actor> Drop for ContextWithActor<A> {
     fn drop(&mut self) {
-        // recovery from thread panic.
-        if std::thread::panicking() && self.ctx.as_ref().unwrap().state.get() == ActorState::Running
-        {
-            let mut ctx = core::mem::take(self);
-            // some of the cached message object may gone. remove them.
-            ctx.cache_ref.retain(|m| !m.is_taken());
-
-            A::spawn(async move {
-                let _ = ctx.run().await;
-            });
-        } else if let Some(tx) = self.drop_notify.take() {
+        // // recovery from thread panic.
+        // if self.ctx.as_ref().unwrap().state.get() == ActorState::Running {
+        //     let mut ctx = core::mem::take(self);
+        //     // some of the cached message object may gone. remove them.
+        //     ctx.cache_ref.retain(|m| !m.is_taken());
+        //
+        //     A::spawn(async move {
+        //         let _ = ctx.run().await;
+        //     });
+        // } else if let Some(tx) = self.drop_notify.take() {
+        //     let _ = tx.send(());
+        // }
+        if let Some(tx) = self.drop_notify.take() {
             let _ = tx.send(());
         }
     }

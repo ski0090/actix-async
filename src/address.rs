@@ -1,6 +1,8 @@
 use core::future::Future;
 use core::ops::Deref;
 
+use alloc::boxed::Box;
+
 use crate::actor::{Actor, ActorState};
 use crate::context::Context;
 use crate::error::ActixAsyncError;
@@ -11,7 +13,7 @@ use crate::message::{
 use crate::request::MessageRequest;
 use crate::runtime::RuntimeService;
 use crate::types::ActixResult;
-use crate::util::channel::{oneshot_channel, Sender};
+use crate::util::channel::{oneshot, Sender};
 use crate::util::futures::LocalBoxedFuture;
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
@@ -127,7 +129,7 @@ impl<A: Actor> Addr<A> {
             ActorState::Stop
         };
 
-        let (tx, rx) = oneshot_channel();
+        let (tx, rx) = oneshot();
 
         MessageRequest::new(self._send(ActorMessage::ActorState(state, Some(tx))), rx)
     }
@@ -201,7 +203,7 @@ where
     F: FnOnce(MessageObject<A>) -> Fut,
 {
     message_send_check::<M>();
-    let (tx, rx) = oneshot_channel();
+    let (tx, rx) = oneshot();
     let msg = MessageObject::new(msg, Some(tx));
     MessageRequest::new(f(msg), rx)
 }
@@ -236,9 +238,9 @@ where
     M: Message + Send,
     Self: Send + Sync + 'static,
 {
-    fn send(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<'_, ActixResult<()>>, M::Result>;
+    fn send(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<ActixResult<()>>, M::Result>;
 
-    fn wait(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<'_, ActixResult<()>>, M::Result>;
+    fn wait(&self, msg: M) -> MessageRequest<RT, LocalBoxedFuture<ActixResult<()>>, M::Result>;
 
     fn do_send(&self, msg: M);
 
@@ -253,14 +255,14 @@ where
     fn send(
         &self,
         msg: M,
-    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<ActixResult<()>>, M::Result> {
         send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Ref(obj))) as _)
     }
 
     fn wait(
         &self,
         msg: M,
-    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<ActixResult<()>>, M::Result> {
         send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Mut(obj))) as _)
     }
 
@@ -281,14 +283,14 @@ where
     fn send(
         &self,
         msg: M,
-    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<ActixResult<()>>, M::Result> {
         send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Ref(obj))) as _)
     }
 
     fn wait(
         &self,
         msg: M,
-    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<'_, ActixResult<()>>, M::Result> {
+    ) -> MessageRequest<A::Runtime, LocalBoxedFuture<ActixResult<()>>, M::Result> {
         send_with_async_closure(msg, |obj| Box::pin(self._send(ActorMessage::Mut(obj))) as _)
     }
 

@@ -50,6 +50,11 @@
 //! }
 //! ```
 
+#![no_std]
+#![forbid(unused_imports, unused_variables, unused_mut)]
+
+extern crate alloc;
+
 mod actor;
 mod handler;
 mod macros;
@@ -86,7 +91,8 @@ mod test {
     use core::task::{Context as StdContext, Poll};
     use core::time::Duration;
 
-    use std::sync::Arc;
+    use alloc::boxed::Box;
+    use alloc::sync::Arc;
 
     use actix_rt::time::{interval, sleep, Interval};
     use actix_rt::Arbiter;

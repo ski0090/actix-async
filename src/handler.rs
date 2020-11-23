@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use crate::actor::Actor;
 use crate::context::Context;
 use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};

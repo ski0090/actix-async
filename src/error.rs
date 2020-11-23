@@ -1,6 +1,6 @@
 use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
-use crate::util::channel::{OneshotRecvError, SendError};
+use crate::util::channel::SendError;
 
 #[derive(PartialEq)]
 pub enum ActixAsyncError {
@@ -15,18 +15,12 @@ pub enum ActixAsyncError {
 
     /// fail to receive result for given message. happens when actor is blocked or the
     /// thread it runs on panicked.
-    Receive,
+    Receiver,
 }
 
 impl<T> From<SendError<T>> for ActixAsyncError {
     fn from(_: SendError<T>) -> Self {
         ActixAsyncError::Closed
-    }
-}
-
-impl From<OneshotRecvError> for ActixAsyncError {
-    fn from(_: OneshotRecvError) -> Self {
-        ActixAsyncError::Receive
     }
 }
 
@@ -46,7 +40,7 @@ impl Debug for ActixAsyncError {
                 "description",
                 &"MessageRequest is timed out. (Failed to receive result from actor in time.)",
             ),
-            ActixAsyncError::Receive => fmt
+            ActixAsyncError::Receiver => fmt
                 .field("cause", &"Receive")
                 .field("description", &"Fail to receive result for given message."),
         };
@@ -60,5 +54,3 @@ impl Display for ActixAsyncError {
         write!(f, "({})", self)
     }
 }
-
-impl std::error::Error for ActixAsyncError {}
