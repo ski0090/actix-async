@@ -6,8 +6,6 @@ pub(crate) use futures_core::stream::Stream;
 
 use crate::util::channel::{oneshot_channel, OneshotReceiver, OneshotSender};
 
-pub type JoinedFutures = Vec<LocalBoxedFuture<'static, ()>>;
-
 pub type LocalBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 pub(crate) fn cancelable<Fut, FutCancel>(
@@ -86,12 +84,12 @@ where
     }
 }
 
-pub(crate) fn join<'a>(fut: &'a mut Vec<LocalBoxedFuture<'static, ()>>) -> Join<'a> {
+pub(crate) fn join(fut: Vec<LocalBoxedFuture<()>>) -> Join {
     Join { fut }
 }
 
 pub(crate) struct Join<'a> {
-    fut: &'a mut Vec<LocalBoxedFuture<'static, ()>>,
+    fut: Vec<LocalBoxedFuture<'a, ()>>,
 }
 
 impl Future for Join<'_> {
