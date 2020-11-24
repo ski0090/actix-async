@@ -161,20 +161,7 @@ where
         'act: 'res,
         'ctx: 'res,
     {
-        Box::pin(async move {
-            let msg = self.msg.take().unwrap();
-            match self.tx.take() {
-                Some(tx) => {
-                    if !tx.is_closed() {
-                        let res = act.handle(msg, ctx).await;
-                        let _ = tx.send(res);
-                    }
-                }
-                None => {
-                    let _ = act.handle(msg, ctx).await;
-                }
-            }
-        })
+        Box::pin(self._handle(move |msg| act.handle(msg, ctx)))
     }
 
     fn handle_wait<'msg, 'act, 'ctx, 'res>(
@@ -187,20 +174,7 @@ where
         'act: 'res,
         'ctx: 'res,
     {
-        Box::pin(async move {
-            let msg = self.msg.take().unwrap();
-            match self.tx.take() {
-                Some(tx) => {
-                    if !tx.is_closed() {
-                        let res = act.handle_wait(msg, ctx).await;
-                        let _ = tx.send(res);
-                    }
-                }
-                None => {
-                    let _ = act.handle_wait(msg, ctx).await;
-                }
-            }
-        })
+        Box::pin(self._handle(move |msg| act.handle_wait(msg, ctx)))
     }
 
     fn is_taken(&self) -> bool {

@@ -352,23 +352,11 @@ impl<A: Actor> Context<A> {
 }
 
 pub(crate) struct ContextWithActor<A: Actor> {
-    ctx: Option<Context<A>>,
-    actor: Option<A>,
+    ctx: Context<A>,
+    actor: A,
     cache_mut: Option<MessageObject<A>>,
     cache_ref: Vec<MessageObject<A>>,
     drop_notify: Option<OneshotSender<()>>,
-}
-
-impl<A: Actor> Default for ContextWithActor<A> {
-    fn default() -> Self {
-        Self {
-            ctx: None,
-            actor: None,
-            cache_mut: None,
-            cache_ref: Vec::new(),
-            drop_notify: None,
-        }
-    }
 }
 
 impl<A: Actor> Drop for ContextWithActor<A> {
@@ -394,8 +382,8 @@ impl<A: Actor> Drop for ContextWithActor<A> {
 impl<A: Actor> ContextWithActor<A> {
     pub(crate) fn new(actor: A, ctx: Context<A>) -> Self {
         Self {
-            actor: Some(actor),
-            ctx: Some(ctx),
+            actor,
+            ctx,
             cache_mut: None,
             cache_ref: Vec::with_capacity(CHANNEL_CAP),
             drop_notify: None,
@@ -403,8 +391,8 @@ impl<A: Actor> ContextWithActor<A> {
     }
 
     pub(crate) async fn first_run(&mut self) {
-        let actor = self.actor.as_mut().unwrap();
-        let ctx = self.ctx.as_mut().unwrap();
+        let actor = &mut self.actor;
+        let ctx = &mut self.ctx;
 
         actor.on_start(ctx).await;
         ctx.state.set(ActorState::Running);
@@ -413,8 +401,8 @@ impl<A: Actor> ContextWithActor<A> {
     }
 
     async fn run(&mut self) {
-        let actor = self.actor.as_mut().unwrap();
-        let ctx = self.ctx.as_mut().unwrap();
+        let actor = &mut self.actor;
+        let ctx = &mut self.ctx;
         let cache_mut = &mut self.cache_mut;
         let cache_ref = &mut self.cache_ref;
         let drop_notify = &mut self.drop_notify;

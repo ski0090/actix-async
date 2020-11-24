@@ -1,3 +1,4 @@
+use core::future::Future;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
@@ -152,6 +153,28 @@ impl<A> DerefMut for MessageObject<A> {
 pub(crate) struct MessageHandlerContainer<M: Message> {
     pub(crate) msg: Option<M>,
     pub(crate) tx: Option<OneshotSender<M::Result>>,
+}
+
+impl<M: Message> MessageHandlerContainer<M> {
+    // give the ownership of message type to closure.
+    pub(crate) async fn _handle<F, Fut>(&mut self, fut: F) 
+    where
+        F: FnOnce(M) -> Fut,
+        Fut: Future<Output = M::Result>
+    {
+        let msg = self.msg.take().unwrap();
+        match self.tx.take() {
+            Some(tx) => {
+                if !tx.is_closed() {
+                    let res = fut(msg).await;
+                    let _ = tx.send(res);
+                }
+            }
+            None => {
+                let _ = fut(msg).await;
+            }
+        }
+    }
 }
 
 pub enum ActorMessage<A> {
