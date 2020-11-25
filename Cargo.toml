@@ -16,7 +16,8 @@ name = "closure"
 path = "./examples/closure.rs"
 
 [dependencies]
-async-channel = "1.5.1"
+concurrent-queue = "1.2.2"
+event-listener = "2.5.1"
 futures-core = { version = "0.3.8", default-features = false }
 pin-project-lite = "0.2"
 slab = "0.4.2"

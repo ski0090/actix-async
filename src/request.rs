@@ -6,9 +6,10 @@ use core::time::Duration;
 use pin_project_lite::pin_project;
 
 use crate::error::ActixAsyncError;
+use crate::message::Message;
 use crate::runtime::RuntimeService;
 use crate::types::ActixResult;
-use crate::util::channel::OneshotReceiver;
+use crate::util::channel::{OneshotReceiver, SendFuture};
 
 /// default timeout for sending message
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -16,13 +17,13 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 pin_project! {
     /// Message request to actor with timeout setting.
     #[project = MessageRequestProj]
-    pub enum MessageRequest<RT, Fut, Res>
+    pub enum MessageRequest<'a, RT, M, Res>
     where
-        RT: RuntimeService
+        RT: RuntimeService,
     {
         Request {
             #[pin]
-            fut: Fut,
+            fut: SendFuture<'a, M>,
             rx: Option<OneshotReceiver<Res>>,
             timeout: RT::Sleep,
             timeout_response: Option<RT::Sleep>
@@ -36,8 +37,11 @@ pin_project! {
 
 const TIMEOUT_CONFIGURABLE: &str = "Timeout is not configurable after Request Future is polled";
 
-impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
-    pub(crate) fn new(fut: Fut, rx: OneshotReceiver<Res>) -> Self {
+impl<'a, RT, M, Res> MessageRequest<'a, RT, M, Res>
+where
+    RT: RuntimeService,
+{
+    pub(crate) fn new(fut: SendFuture<'a, M>, rx: OneshotReceiver<Res>) -> Self {
         MessageRequest::Request {
             fut,
             rx: Some(rx),
@@ -84,10 +88,9 @@ impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
     }
 }
 
-impl<RT, Fut, Res> Future for MessageRequest<RT, Fut, Res>
+impl<RT, M, Res> Future for MessageRequest<'_, RT, M, Res>
 where
     RT: RuntimeService,
-    Fut: Future<Output = ActixResult<()>>,
 {
     type Output = ActixResult<Res>;
 
@@ -109,7 +112,7 @@ where
                     });
                     self.poll(cx)
                 }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(e.into())),
                 Poll::Pending => match Pin::new(timeout).poll(cx) {
                     Poll::Ready(_) => Poll::Ready(Err(ActixAsyncError::SendTimeout)),
                     Poll::Pending => Poll::Pending,

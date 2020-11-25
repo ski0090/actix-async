@@ -21,6 +21,10 @@ impl<M: Message> Message for Box<M> {
     type Result = M::Result;
 }
 
+impl Message for () {
+    type Result = ();
+}
+
 pub(crate) struct FunctionMessage<F, R> {
     pub(crate) func: F,
     _res: PhantomData<R>,
@@ -157,10 +161,10 @@ pub(crate) struct MessageHandlerContainer<M: Message> {
 
 impl<M: Message> MessageHandlerContainer<M> {
     // give the ownership of message type to closure.
-    pub(crate) async fn _handle<F, Fut>(&mut self, fut: F) 
+    pub(crate) async fn _handle<F, Fut>(&mut self, fut: F)
     where
         F: FnOnce(M) -> Fut,
-        Fut: Future<Output = M::Result>
+        Fut: Future<Output = M::Result>,
     {
         let msg = self.msg.take().unwrap();
         match self.tx.take() {
