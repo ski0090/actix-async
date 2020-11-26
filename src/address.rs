@@ -13,7 +13,7 @@ use crate::message::{
 use crate::request::MessageRequest;
 use crate::runtime::RuntimeService;
 use crate::types::ActixResult;
-use crate::util::channel::{oneshot, SendFuture, Sender, WeakSender};
+use crate::util::channel::{oneshot, Receiver, SendFuture, Sender, WeakSender};
 use crate::util::futures::LocalBoxedFuture;
 
 /// The message sink of `Actor` type. `Message` and boxed async blocks are sent to Actor through it.
@@ -163,7 +163,14 @@ impl<A: Actor> Addr<A> {
         Self(tx)
     }
 
-    fn _send<M, F>(
+    pub(crate) fn from_recv(rx: &Receiver<ActorMessage<A>>) -> ActixResult<Self> {
+        match rx.as_sender() {
+            Some(tx) => Ok(Addr::new(tx)),
+            None => Err(ActixAsyncError::Closed),
+        }
+    }
+
+    pub(crate) fn _send<M, F>(
         &self,
         msg: M,
         f: F,

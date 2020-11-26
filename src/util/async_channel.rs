@@ -100,6 +100,19 @@ impl<T> Sender<T> {
             channel: RefCounter::downgrade(&self.channel),
         }
     }
+
+    fn clone_sender(channel: &RefCounter<Channel<T>>) -> Self {
+        let count = channel.sender_count.fetch_add(1, Ordering::Relaxed);
+
+        // Make sure the count never overflows, even if lots of sender clones are leaked.
+        if count > usize::MAX / 2 {
+            panic!("Sender count overflow");
+        }
+
+        Sender {
+            channel: RefCounter::clone(channel),
+        }
+    }
 }
 
 impl<T> Drop for Sender<T> {
@@ -118,17 +131,8 @@ impl<T> fmt::Debug for Sender<T> {
 }
 
 impl<T> Clone for Sender<T> {
-    fn clone(&self) -> Sender<T> {
-        let count = self.channel.sender_count.fetch_add(1, Ordering::Relaxed);
-
-        // Make sure the count never overflows, even if lots of sender clones are leaked.
-        if count > usize::MAX / 2 {
-            panic!("Sender count overflow");
-        }
-
-        Sender {
-            channel: self.channel.clone(),
-        }
+    fn clone(&self) -> Self {
+        Self::clone_sender(&self.channel)
     }
 }
 
@@ -256,6 +260,14 @@ impl<T> Receiver<T> {
         }
     }
 
+    pub fn as_sender(&self) -> Option<Sender<T>> {
+        if self.channel.queue.is_closed() {
+            None
+        } else {
+            Some(Sender::clone_sender(&self.channel))
+        }
+    }
+
     pub fn close(&self) -> bool {
         self.channel.close()
     }
@@ -291,67 +303,16 @@ impl<T> Clone for Receiver<T> {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub struct SendError<T>(pub T);
-
-impl<T> fmt::Debug for SendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SendError(..)")
-    }
-}
-
-impl<T> fmt::Display for SendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sending into a closed channel")
-    }
-}
-
-#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum TrySendError<T> {
     Full(T),
     Closed(T),
 }
 
-impl<T> fmt::Debug for TrySendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            TrySendError::Full(..) => write!(f, "Full(..)"),
-            TrySendError::Closed(..) => write!(f, "Closed(..)"),
-        }
-    }
-}
-
-impl<T> fmt::Display for TrySendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            TrySendError::Full(..) => write!(f, "sending into a full channel"),
-            TrySendError::Closed(..) => write!(f, "sending into a closed channel"),
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct RecvError;
 
-impl fmt::Display for RecvError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "receiving from an empty and closed channel")
-    }
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum TryRecvError {
     Empty,
     Closed,
-}
-
-impl fmt::Display for TryRecvError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            TryRecvError::Empty => write!(f, "receiving from an empty channel"),
-            TryRecvError::Closed => write!(f, "receiving from an empty and closed channel"),
-        }
-    }
 }
 
 // Copy/paste from concurrent-queue crate.
@@ -370,6 +331,8 @@ pub struct Bounded<T> {
     mark_bit: usize,
 }
 
+// SAFETY:
+// buffer is guarded by atomics
 unsafe impl<T: Send> Send for Bounded<T> {}
 unsafe impl<T: Send> Sync for Bounded<T> {}
 
@@ -442,6 +405,8 @@ impl<T> Bounded<T> {
                     Ordering::Relaxed,
                 ) {
                     Ok(_) => {
+                        // SAFETY:
+                        // have exclusive to slot
                         // Write the value into the slot and update the stamp.
                         unsafe {
                             slot.value.get().write(MaybeUninit::new(value));
@@ -504,6 +469,8 @@ impl<T> Bounded<T> {
                     Ordering::Relaxed,
                 ) {
                     Ok(_) => {
+                        // SAFETY:
+                        // have exclusive to slot.
                         // Read the value from the slot and update the stamp.
                         let value = unsafe { slot.value.get().read().assume_init() };
                         slot.stamp
@@ -569,6 +536,10 @@ impl<T> Bounded<T> {
         let tail = self.tail.fetch_or(self.mark_bit, Ordering::SeqCst);
         tail & self.mark_bit == 0
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.tail.load(Ordering::SeqCst) & self.mark_bit != 0
+    }
 }
 
 impl<T> Drop for Bounded<T> {
@@ -587,6 +558,8 @@ impl<T> Drop for Bounded<T> {
 
             // Drop the value in the slot.
             let slot = &self.buffer[index];
+            // SAFETY:
+            // slot must be init as the value is inserted after head/tail moved successfully.
             unsafe {
                 let value = slot.value.get().read().assume_init();
                 drop(value);

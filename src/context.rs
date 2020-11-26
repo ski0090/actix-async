@@ -8,13 +8,15 @@ use alloc::vec::Vec;
 use slab::Slab;
 
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
-use crate::address::{Addr, WeakAddr};
+use crate::address::Addr;
 use crate::handler::Handler;
 use crate::message::{
     ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
+use crate::types::ActixResult;
 use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
 use crate::util::futures::{cancelable, join, next, LocalBoxedFuture, Stream};
+use core::ops::Deref;
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -24,7 +26,6 @@ pub struct Context<A> {
     state: Cell<ActorState>,
     interval_queue: RefCell<Slab<IntervalMessage<A>>>,
     delay_queue: RefCell<Slab<ActorMessage<A>>>,
-    tx: WeakAddr<A>,
     rx: Receiver<ActorMessage<A>>,
 }
 
@@ -42,12 +43,11 @@ impl ContextJoinHandle {
 }
 
 impl<A: Actor> Context<A> {
-    pub(crate) fn new(tx: WeakAddr<A>, rx: Receiver<ActorMessage<A>>) -> Self {
+    pub(crate) fn new(rx: Receiver<ActorMessage<A>>) -> Self {
         Context {
             state: Cell::new(ActorState::Stop),
             interval_queue: RefCell::new(Slab::with_capacity(8)),
             delay_queue: RefCell::new(Slab::with_capacity(CHANNEL_CAP)),
-            tx,
             rx,
         }
     }
@@ -106,7 +106,7 @@ impl<A: Actor> Context<A> {
 
     /// get the address of actor from context.
     pub fn address(&self) -> Option<Addr<A>> {
-        self.tx.upgrade()
+        Addr::from_recv(&self.rx).ok()
     }
 
     /// add a stream to context. multiple stream can be added to one context.
@@ -165,7 +165,7 @@ impl<A: Actor> Context<A> {
         A: Handler<S::Item>,
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy + 'static,
     {
-        let weak_tx = self.tx.clone();
+        let rx = self.rx.clone();
 
         let fut = async move {
             let mut stream = stream;
@@ -175,7 +175,8 @@ impl<A: Actor> Context<A> {
             let mut stream = unsafe { Pin::new_unchecked(&mut stream) };
             while let Some(msg) = next(&mut stream).await {
                 let msg = MessageObject::new(msg, None);
-                if weak_tx._send(f(msg)).await.is_err() {
+                let msg = f(msg);
+                if Self::send_with_rx(&rx, msg).await.is_err() {
                     return;
                 }
             }
@@ -191,14 +192,13 @@ impl<A: Actor> Context<A> {
     fn interval(&self, dur: Duration, msg: IntervalMessage<A>) -> ContextJoinHandle {
         let token = self.interval_queue.borrow_mut().insert(msg);
 
-        let weak_tx = self.tx.clone();
-        let weak_tx1 = self.tx.clone();
+        let rx = self.rx.clone();
+        let rx1 = self.rx.clone();
 
         let fut = async move {
             loop {
                 A::sleep(dur).await;
-                if weak_tx1
-                    ._send(ActorMessage::IntervalToken(token))
+                if Self::send_with_rx(&rx, ActorMessage::IntervalToken(token))
                     .await
                     .is_err()
                 {
@@ -208,9 +208,7 @@ impl<A: Actor> Context<A> {
         };
 
         let on_cancel = async move {
-            let _ = weak_tx
-                ._send(ActorMessage::IntervalTokenCancel(token))
-                .await;
+            let _ = Self::send_with_rx(&rx1, ActorMessage::IntervalTokenCancel(token)).await;
         };
 
         let (fut, handle) = cancelable(fut, on_cancel);
@@ -223,16 +221,16 @@ impl<A: Actor> Context<A> {
     fn later(&self, dur: Duration, msg: ActorMessage<A>) -> ContextJoinHandle {
         let token = self.delay_queue.borrow_mut().insert(msg);
 
-        let weak_tx = self.tx.clone();
-        let weak_tx1 = self.tx.clone();
+        let rx = self.rx.clone();
+        let rx1 = self.rx.clone();
 
         let fut = async move {
             A::sleep(dur).await;
-            let _ = weak_tx1._send(ActorMessage::DelayToken(token)).await;
+            let _ = Self::send_with_rx(&rx, ActorMessage::DelayToken(token)).await;
         };
 
         let on_cancel = async move {
-            let _ = weak_tx._send(ActorMessage::DelayTokenCancel(token)).await;
+            let _ = Self::send_with_rx(&rx1, ActorMessage::DelayTokenCancel(token)).await;
         };
 
         let (fut, handle) = cancelable(fut, on_cancel);
@@ -348,6 +346,10 @@ impl<A: Actor> Context<A> {
             }
             _ => unreachable!("Queued message can only be ActorMessage::Ref or ActorMessage::Mut"),
         }
+    }
+
+    async fn send_with_rx(rx: &Receiver<ActorMessage<A>>, msg: ActorMessage<A>) -> ActixResult<()> {
+        Addr::from_recv(rx)?.deref().send(msg).await
     }
 }
 

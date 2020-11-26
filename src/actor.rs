@@ -3,7 +3,7 @@ use core::time::Duration;
 
 use alloc::boxed::Box;
 
-use crate::address::{Addr, WeakAddr};
+use crate::address::Addr;
 use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
@@ -104,9 +104,8 @@ pub trait Actor: Sized + 'static {
         let (tx, rx) = channel(CHANNEL_CAP);
 
         let tx = Addr::new(tx);
-        let weak_tx = Addr::downgrade(&tx);
 
-        Self::_start(weak_tx, rx, f);
+        Self::_start(rx, f);
 
         tx
     }
@@ -137,10 +136,9 @@ pub trait Actor: Sized + 'static {
         let (tx, rx) = channel(CHANNEL_CAP);
 
         let tx = Addr::new(tx);
-        let weak_tx = Addr::downgrade(&tx);
 
         arb.exec_fn(move || {
-            Self::_start(weak_tx, rx, f);
+            Self::_start(rx, f);
         });
 
         tx
@@ -154,13 +152,13 @@ pub trait Actor: Sized + 'static {
         Self::Runtime::sleep(dur)
     }
 
-    fn _start<F, Fut>(tx: WeakAddr<Self>, rx: Receiver<ActorMessage<Self>>, f: F)
+    fn _start<F, Fut>(rx: Receiver<ActorMessage<Self>>, f: F)
     where
         F: FnOnce(&mut Context<Self>) -> Fut + 'static,
         Fut: Future<Output = Self>,
     {
         Self::spawn(async move {
-            let mut ctx = Context::new(tx, rx);
+            let mut ctx = Context::new(rx);
 
             let actor = f(&mut ctx).await;
 
