@@ -249,7 +249,7 @@ mod test {
                 move |_, ctx| {
                     Box::pin(async move {
                         ctx.add_stream(TestStream {
-                            interval: interval(Duration::from_millis(400)),
+                            interval: interval(Duration::from_millis(500)),
                             state,
                         })
                     })
@@ -258,10 +258,10 @@ mod test {
             .await
             .unwrap();
 
-        sleep(Duration::from_millis(1600)).await;
+        sleep(Duration::from_millis(600)).await;
         handle.cancel();
-        sleep(Duration::from_millis(800)).await;
-        assert_eq!(4, state.load(Ordering::SeqCst));
+        sleep(Duration::from_millis(1000)).await;
+        assert_eq!(2, state.load(Ordering::SeqCst));
     }
 
     struct TestActor(usize);

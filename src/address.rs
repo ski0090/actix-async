@@ -19,13 +19,13 @@ use crate::util::futures::LocalBoxedFuture;
 /// The message sink of `Actor` type. `Message` and boxed async blocks are sent to Actor through it.
 pub struct Addr<A>(Sender<ActorMessage<A>>);
 
-impl<A: Actor> Clone for Addr<A> {
+impl<A> Clone for Addr<A> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<A: Actor> Deref for Addr<A> {
+impl<A> Deref for Addr<A> {
     type Target = Sender<ActorMessage<A>>;
 
     fn deref(&self) -> &Self::Target {

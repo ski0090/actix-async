@@ -16,7 +16,7 @@ name = "closure"
 path = "./examples/closure.rs"
 
 [dependencies]
-concurrent-queue = "1.2.2"
+cache-padded = "1.1.1"
 event-listener = "2.5.1"
 futures-core = { version = "0.3.8", default-features = false }
 pin-project-lite = "0.2"
