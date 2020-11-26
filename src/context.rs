@@ -16,7 +16,7 @@ use crate::message::{
     ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
 use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
-use crate::util::futures::{cancelable, join, next, LocalBoxedFuture, Stream};
+use crate::util::futures::{cancelable, join, next, JoinFutures, LocalBoxedFuture, Stream};
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -240,14 +240,30 @@ impl<A: Actor> Context<A> {
         ContextJoinHandle { handle }
     }
 
-    async fn try_handle_concurrent(&mut self, actor: &A, cache_ref: &mut Vec<MessageObject<A>>) {
+    async fn try_handle_concurrent(
+        &mut self,
+        actor: &A,
+        cache_ref: &mut Vec<MessageObject<A>>,
+        fut: &mut JoinFutures,
+    ) {
         if !cache_ref.is_empty() {
-            let fut = cache_ref
-                .iter_mut()
-                .map(|m| m.handle(actor, self))
-                .collect();
+            cache_ref.iter_mut().for_each(|m| {
+                /*
+                    SAFETY:
+                    `JoinFutures` is a type alias for `Vec<LocalBoxedFuture<'static, ()>>`.
 
-            // resolve all futures.
+                    It can not tie to actor and context's lifetime. The reason is that it has no
+                    idea the futures are all resolved in this scope and would assume the boxed
+                    futures would live as long as the actor and context. Making it impossible to
+                    mutably borrow them from this point forward.
+
+                    All futures transmuted to static lifetime must resolved before exiting
+                    try_handle_concurrent method.
+                */
+                fut.push(unsafe { core::mem::transmute(m.handle(actor, self)) });
+            });
+
+            // join would poll all futures and only resolve when JoinFutures is empty.
             join(fut).await;
 
             // clear the cache as they are all finished.
@@ -261,11 +277,12 @@ impl<A: Actor> Context<A> {
         actor: &mut A,
         cache_mut: &mut Option<MessageObject<A>>,
         cache_ref: &mut Vec<MessageObject<A>>,
+        fut: &mut JoinFutures,
     ) {
         // put message in cache in case thread panic before it's handled
         *cache_mut = Some(msg);
         // try handle concurrent messages first.
-        self.try_handle_concurrent(&*actor, cache_ref).await;
+        self.try_handle_concurrent(&*actor, cache_ref, fut).await;
         // pop the cache and handle
         cache_mut.take().unwrap().handle_wait(actor, self).await;
     }
@@ -292,11 +309,12 @@ impl<A: Actor> Context<A> {
         cache_mut: &mut Option<MessageObject<A>>,
         cache_ref: &mut Vec<MessageObject<A>>,
         drop_notify: &mut Option<OneshotSender<()>>,
+        fut: &mut JoinFutures,
     ) -> bool {
         match msg {
             ActorMessage::Ref(msg) => cache_ref.push(msg),
             ActorMessage::Mut(msg) => {
-                self.handle_exclusive(msg, actor, cache_mut, cache_ref)
+                self.handle_exclusive(msg, actor, cache_mut, cache_ref, fut)
                     .await
             }
             ActorMessage::DelayToken(token) => {
@@ -304,7 +322,7 @@ impl<A: Actor> Context<A> {
 
                 if queue.contains(token) {
                     let msg = queue.remove(token);
-                    self.handle_queued_message(msg, actor, cache_mut, cache_ref)
+                    self.handle_queued_message(msg, actor, cache_mut, cache_ref, fut)
                         .await;
                 }
             }
@@ -313,7 +331,7 @@ impl<A: Actor> Context<A> {
                     Some(msg) => msg.clone_message(),
                     None => return false,
                 };
-                self.handle_queued_message(msg, actor, cache_mut, cache_ref)
+                self.handle_queued_message(msg, actor, cache_mut, cache_ref, fut)
                     .await;
             }
             ActorMessage::DelayTokenCancel(token) => self.handle_delay_cancel(token),
@@ -337,11 +355,12 @@ impl<A: Actor> Context<A> {
         actor: &mut A,
         cache_mut: &mut Option<MessageObject<A>>,
         cache_ref: &mut Vec<MessageObject<A>>,
+        fut: &mut JoinFutures,
     ) {
         match msg {
             ActorMessage::Ref(msg) => cache_ref.push(msg),
             ActorMessage::Mut(msg) => {
-                self.handle_exclusive(msg, actor, cache_mut, cache_ref)
+                self.handle_exclusive(msg, actor, cache_mut, cache_ref, fut)
                     .await
             }
             _ => unreachable!("Queued message can only be ActorMessage::Ref or ActorMessage::Mut"),
@@ -412,8 +431,10 @@ impl<A: Actor> ContextWithActor<A> {
         let cache_ref = &mut self.cache_ref;
         let drop_notify = &mut self.drop_notify;
 
+        let fut = &mut JoinFutures::with_capacity(CHANNEL_CAP);
+
         // if there is cached message it must be dealt with
-        ctx.try_handle_concurrent(&*actor, cache_ref).await;
+        ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;
 
         if let Some(mut msg) = cache_mut.take() {
             msg.handle_wait(actor, ctx).await;
@@ -424,7 +445,7 @@ impl<A: Actor> ContextWithActor<A> {
             match ctx.rx.try_recv() {
                 Ok(msg) => {
                     let is_force_stop = ctx
-                        .handle_message(msg, actor, cache_mut, cache_ref, drop_notify)
+                        .handle_message(msg, actor, cache_mut, cache_ref, drop_notify, fut)
                         .await;
 
                     if is_force_stop {
@@ -433,13 +454,13 @@ impl<A: Actor> ContextWithActor<A> {
                 }
                 Err(TryRecvError::Empty) => {
                     // channel is empty. try to handle concurrent messages from previous iters.
-                    ctx.try_handle_concurrent(actor, cache_ref).await;
+                    ctx.try_handle_concurrent(actor, cache_ref, fut).await;
 
                     // block the task and recv one message when channel is empty.
                     match ctx.rx.recv().await {
                         Ok(msg) => {
                             let is_force_stop = ctx
-                                .handle_message(msg, actor, cache_mut, cache_ref, drop_notify)
+                                .handle_message(msg, actor, cache_mut, cache_ref, drop_notify, fut)
                                 .await;
 
                             if is_force_stop {
@@ -453,7 +474,7 @@ impl<A: Actor> ContextWithActor<A> {
                     // channel is closed. stop the context.
                     ctx.stop();
                     // try to handle concurrent messages from previous iters.
-                    ctx.try_handle_concurrent(&*actor, cache_ref).await;
+                    ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;
 
                     break;
                 }

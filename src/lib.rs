@@ -256,7 +256,7 @@ mod test {
             .await
             .unwrap();
 
-        sleep(Duration::from_millis(600)).await;
+        sleep(Duration::from_millis(750)).await;
         handle.cancel();
         sleep(Duration::from_millis(1000)).await;
         assert_eq!(2, state.load(Ordering::SeqCst));

@@ -87,12 +87,14 @@ where
     }
 }
 
-pub(crate) fn join(fut: Vec<LocalBoxedFuture<()>>) -> Join {
+pub(crate) type JoinFutures = Vec<LocalBoxedFuture<'static, ()>>;
+
+pub(crate) fn join(fut: &mut JoinFutures) -> Join {
     Join { fut }
 }
 
 pub(crate) struct Join<'a> {
-    fut: Vec<LocalBoxedFuture<'a, ()>>,
+    fut: &'a mut JoinFutures,
 }
 
 impl Future for Join<'_> {
