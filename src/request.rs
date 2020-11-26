@@ -18,7 +18,7 @@ pin_project! {
     #[project = MessageRequestProj]
     pub enum MessageRequest<RT, Fut, Res>
     where
-        RT: RuntimeService
+        RT: RuntimeService,
     {
         Request {
             #[pin]
@@ -36,7 +36,10 @@ pin_project! {
 
 const TIMEOUT_CONFIGURABLE: &str = "Timeout is not configurable after Request Future is polled";
 
-impl<RT: RuntimeService, Fut, Res> MessageRequest<RT, Fut, Res> {
+impl<RT, Fut, Res> MessageRequest<RT, Fut, Res>
+where
+    RT: RuntimeService,
+{
     pub(crate) fn new(fut: Fut, rx: OneshotReceiver<Res>) -> Self {
         MessageRequest::Request {
             fut,

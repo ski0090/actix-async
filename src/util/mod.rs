@@ -1,5 +1,9 @@
+mod async_channel;
+
 pub(crate) mod channel {
-    pub(crate) use async_channel::{bounded as channel, Receiver, SendError, Sender, TryRecvError};
+    pub(crate) use super::async_channel::{
+        bounded as channel, Receiver, SendFuture, Sender, TryRecvError, WeakSender,
+    };
 
     use core::cell::UnsafeCell;
     use core::future::Future;

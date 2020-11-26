@@ -69,7 +69,7 @@ pub mod prelude {
     #[cfg(feature = "actix-rt")]
     pub use crate::actor;
     pub use crate::actor::Actor;
-    pub use crate::address::AddrHandler;
+    // pub use crate::address::AddrHandler;
     pub use crate::context::Context;
     pub use crate::context::ContextJoinHandle;
     pub use crate::error::ActixAsyncError;

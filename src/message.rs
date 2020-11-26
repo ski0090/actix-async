@@ -157,10 +157,10 @@ pub(crate) struct MessageHandlerContainer<M: Message> {
 
 impl<M: Message> MessageHandlerContainer<M> {
     // give the ownership of message type to closure.
-    pub(crate) async fn _handle<F, Fut>(&mut self, fut: F) 
+    pub(crate) async fn _handle<F, Fut>(&mut self, fut: F)
     where
         F: FnOnce(M) -> Fut,
-        Fut: Future<Output = M::Result>
+        Fut: Future<Output = M::Result>,
     {
         let msg = self.msg.take().unwrap();
         match self.tx.take() {
