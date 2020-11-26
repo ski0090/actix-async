@@ -17,10 +17,9 @@ path = "./examples/closure.rs"
 
 [dependencies]
 cache-padded = "1.1.1"
-event-listener = "2.5.1"
 futures-core = { version = "0.3.8", default-features = false }
 pin-project-lite = "0.2"
-slab = "0.4.2"
+spin = "0.7.0"
 
 actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-0.7.3", optional = true }
 

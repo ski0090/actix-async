@@ -6,8 +6,6 @@ use core::time::Duration;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use slab::Slab;
-
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
 use crate::address::Addr;
 use crate::error::ActixAsyncError;
@@ -17,6 +15,7 @@ use crate::message::{
 };
 use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
 use crate::util::futures::{cancelable, join, next, JoinFutures, LocalBoxedFuture, Stream};
+use crate::util::slab::Slab;
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.

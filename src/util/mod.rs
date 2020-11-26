@@ -1,5 +1,6 @@
 mod async_channel;
 mod async_oneshot;
+pub(crate) mod slab;
 
 pub(crate) mod channel {
     pub(crate) use super::async_channel::{
