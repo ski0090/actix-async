@@ -12,6 +12,8 @@ use core::usize;
 use concurrent_queue::{ConcurrentQueue, PopError, PushError};
 use event_listener::{Event, EventListener};
 
+use crate::error::ActixAsyncError;
+use crate::types::ActixResult;
 use crate::util::futures::Stream;
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
@@ -86,10 +88,6 @@ impl<T> Sender<T> {
         }
     }
 
-    pub async fn send_async(&self, msg: T) -> Result<(), SendError<T>> {
-        self.send(msg).await
-    }
-
     pub fn send(&self, msg: T) -> SendFuture<'_, T> {
         SendFuture {
             sender: self,
@@ -154,7 +152,7 @@ impl<T> fmt::Debug for Sender<T> {
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Sender<T> {
-        // let count = self.channel.sender_count.fetch_add(1, Ordering::Relaxed);
+        self.channel.sender_count.fetch_add(1, Ordering::Relaxed);
 
         // Make sure the count never overflows, even if lots of sender clones are leaked.
         // if count > usize::MAX / 2 {
@@ -176,7 +174,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<T> Future for SendFuture<'_, T> {
-    type Output = Result<(), SendError<T>>;
+    type Output = ActixResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -194,7 +192,7 @@ impl<T> Future for SendFuture<'_, T> {
                     }
                     return Poll::Ready(Ok(()));
                 }
-                Err(TrySendError::Closed(msg)) => return Poll::Ready(Err(SendError(msg))),
+                Err(TrySendError::Closed(_)) => return Poll::Ready(Err(ActixAsyncError::Closed)),
                 Err(TrySendError::Full(m)) => msg = m,
             }
 
@@ -236,7 +234,14 @@ impl<T> Clone for WeakSender<T> {
 
 impl<T> WeakSender<T> {
     pub fn upgrade(&self) -> Option<Sender<T>> {
-        WeakRefCounter::upgrade(&self.channel).map(|channel| Sender { channel })
+        WeakRefCounter::upgrade(&self.channel).and_then(|channel| {
+            if channel.sender_count.fetch_add(1, Ordering::Relaxed) == 0 {
+                channel.sender_count.fetch_sub(1, Ordering::SeqCst);
+                None
+            } else {
+                Some(Sender { channel })
+            }
+        })
     }
 }
 
@@ -344,7 +349,7 @@ impl<T> fmt::Debug for Receiver<T> {
 
 impl<T> Clone for Receiver<T> {
     fn clone(&self) -> Receiver<T> {
-        // let count = self.channel.receiver_count.fetch_add(1, Ordering::Relaxed);
+        self.channel.receiver_count.fetch_add(1, Ordering::Relaxed);
         //
         // // Make sure the count never overflows, even if lots of receiver clones are leaked.
         // if count > usize::MAX / 2 {
@@ -404,11 +409,11 @@ impl<T> Stream for Receiver<T> {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct SendError<T>(pub T);
 
-impl<T> SendError<T> {
-    pub fn into_inner(self) -> T {
-        self.0
-    }
-}
+// impl<T> SendError<T> {
+//     pub fn into_inner(self) -> T {
+//         self.0
+//     }
+// }
 
 impl<T> fmt::Debug for SendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

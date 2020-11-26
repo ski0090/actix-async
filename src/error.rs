@@ -1,7 +1,5 @@
 use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
-use crate::util::channel::SendError;
-
 #[derive(PartialEq)]
 pub enum ActixAsyncError {
     /// actor's channel is closed. happens when actor is shutdown.
@@ -16,12 +14,6 @@ pub enum ActixAsyncError {
     /// fail to receive result for given message. happens when actor is blocked or the
     /// thread it runs on panicked.
     Receiver,
-}
-
-impl<T> From<SendError<T>> for ActixAsyncError {
-    fn from(_: SendError<T>) -> Self {
-        ActixAsyncError::Closed
-    }
 }
 
 impl Debug for ActixAsyncError {

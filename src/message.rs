@@ -21,10 +21,6 @@ impl<M: Message> Message for Box<M> {
     type Result = M::Result;
 }
 
-impl Message for () {
-    type Result = ();
-}
-
 pub(crate) struct FunctionMessage<F, R> {
     pub(crate) func: F,
     _res: PhantomData<R>,

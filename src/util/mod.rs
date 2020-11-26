@@ -2,7 +2,7 @@ mod async_channel;
 
 pub(crate) mod channel {
     pub(crate) use super::async_channel::{
-        bounded as channel, Receiver, SendError, SendFuture, Sender, TryRecvError, WeakSender,
+        bounded as channel, Receiver, SendFuture, Sender, TryRecvError, WeakSender,
     };
 
     use core::cell::UnsafeCell;

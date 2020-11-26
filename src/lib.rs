@@ -51,7 +51,7 @@
 //! ```
 
 #![no_std]
-// #![forbid(unused_imports, unused_variables, unused_mut)]
+#![forbid(unused_imports, unused_variables, unused_mut)]
 
 extern crate alloc;
 
@@ -162,34 +162,34 @@ mod test {
         assert_eq!(res, Err(ActixAsyncError::ReceiveTimeout));
     }
 
-    // #[actix_rt::test]
-    // async fn test_recipient() {
-    //     let addr = TestActor::default().start();
-    //
-    //     let re = addr.recipient::<TestMessage>();
-    //
-    //     let res = re.send(TestMessage).await;
-    //     assert_eq!(996, res.unwrap());
-    //
-    //     let res = re.wait(TestMessage).await;
-    //     assert_eq!(251, res.unwrap());
-    //
-    //     drop(re);
-    //
-    //     let re = addr.recipient_weak::<TestMessage>();
-    //
-    //     let res = re.send(TestMessage).await;
-    //     assert_eq!(996, res.unwrap());
-    //
-    //     let res = re.wait(TestMessage).await;
-    //     assert_eq!(251, res.unwrap());
-    //
-    //     drop(addr);
-    //
-    //     let res = re.send(TestMessage).await;
-    //
-    //     assert_eq!(res, Err(ActixAsyncError::Closed));
-    // }
+    #[actix_rt::test]
+    async fn test_recipient() {
+        let addr = TestActor::default().start();
+
+        let re = addr.recipient::<TestMessage>();
+
+        let res = re.send(TestMessage).await;
+        assert_eq!(996, res.unwrap());
+
+        let res = re.wait(TestMessage).await;
+        assert_eq!(251, res.unwrap());
+
+        drop(re);
+
+        let re = addr.recipient_weak::<TestMessage>();
+
+        let res = re.send(TestMessage).await;
+        assert_eq!(996, res.unwrap());
+
+        let res = re.wait(TestMessage).await;
+        assert_eq!(251, res.unwrap());
+
+        drop(addr);
+
+        let res = re.send(TestMessage).await;
+
+        assert_eq!(res, Err(ActixAsyncError::Closed));
+    }
 
     #[actix_rt::test]
     async fn test_delay() {
