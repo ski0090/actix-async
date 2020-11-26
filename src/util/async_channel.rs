@@ -18,7 +18,6 @@ use cache_padded::CachePadded;
 use event_listener::{Event, EventListener};
 
 use crate::error::ActixAsyncError;
-use crate::types::ActixResult;
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
 struct Channel<T> {
@@ -145,7 +144,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<T> Future for SendFuture<'_, T> {
-    type Output = ActixResult<()>;
+    type Output = Result<(), ActixAsyncError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         let this = self.project();

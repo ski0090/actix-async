@@ -59,7 +59,6 @@ mod actor;
 mod handler;
 mod macros;
 mod message;
-mod types;
 mod util;
 
 pub mod address;
@@ -69,7 +68,6 @@ pub mod prelude {
     #[cfg(feature = "actix-rt")]
     pub use crate::actor;
     pub use crate::actor::Actor;
-    // pub use crate::address::AddrHandler;
     pub use crate::context::Context;
     pub use crate::context::ContextJoinHandle;
     pub use crate::error::ActixAsyncError;
@@ -139,14 +137,14 @@ mod test {
         let addr = TestActor::default().start();
 
         let (size, handle) = addr.send(TestIntervalMessage).await.unwrap();
-        sleep(Duration::from_millis(1700)).await;
+        sleep(Duration::from_millis(1100)).await;
         handle.cancel();
-        assert_eq!(size.load(Ordering::SeqCst), 3);
+        assert_eq!(size.load(Ordering::SeqCst), 2);
 
         let (size, handle) = addr.wait(TestIntervalMessage).await.unwrap();
-        sleep(Duration::from_millis(1700)).await;
+        sleep(Duration::from_millis(1100)).await;
         handle.cancel();
-        assert_eq!(size.load(Ordering::SeqCst), 3)
+        assert_eq!(size.load(Ordering::SeqCst), 2)
     }
 
     #[actix_rt::test]

@@ -1,4 +1,5 @@
 use core::cell::{Cell, RefCell};
+use core::ops::Deref;
 use core::pin::Pin;
 use core::time::Duration;
 
@@ -9,14 +10,13 @@ use slab::Slab;
 
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
 use crate::address::Addr;
+use crate::error::ActixAsyncError;
 use crate::handler::Handler;
 use crate::message::{
     ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
-use crate::types::ActixResult;
 use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
 use crate::util::futures::{cancelable, join, next, LocalBoxedFuture, Stream};
-use core::ops::Deref;
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -348,7 +348,10 @@ impl<A: Actor> Context<A> {
         }
     }
 
-    async fn send_with_rx(rx: &Receiver<ActorMessage<A>>, msg: ActorMessage<A>) -> ActixResult<()> {
+    async fn send_with_rx(
+        rx: &Receiver<ActorMessage<A>>,
+        msg: ActorMessage<A>,
+    ) -> Result<(), ActixAsyncError> {
         Addr::from_recv(rx)?.deref().send(msg).await
     }
 }

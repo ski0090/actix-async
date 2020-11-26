@@ -38,7 +38,7 @@ const READY: usize = 0b0001;
 
 impl<T> Inner<T> {
     #[inline(always)]
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Inner {
             state: AtomicUsize::new(0),
             value: UnsafeCell::new(MaybeUninit::uninit()),

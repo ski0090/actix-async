@@ -5,30 +5,40 @@ use core::time::Duration;
 
 use pin_project_lite::pin_project;
 
+use crate::actor::Actor;
 use crate::error::ActixAsyncError;
+use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
-use crate::types::ActixResult;
-use crate::util::channel::OneshotReceiver;
+use crate::util::channel::{OneshotReceiver, SendFuture};
+use crate::util::futures::LocalBoxedFuture;
 
 /// default timeout for sending message
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Message request to actor with timeout setting.
+pub type MessageRequest<'a, A, R> =
+    _MessageRequest<<A as Actor>::Runtime, SendFuture<'a, ActorMessage<A>>, R>;
+
+/// Box version of MessageRequest that bound to `Message::Result` type.
+pub type BoxedMessageRequest<'a, RT, R> =
+    _MessageRequest<RT, LocalBoxedFuture<'a, Result<(), ActixAsyncError>>, R>;
+
 pin_project! {
-    /// Message request to actor with timeout setting.
+    #[doc(hidden)]
     #[project = MessageRequestProj]
-    pub enum MessageRequest<RT, Fut, Res>
+    pub enum _MessageRequest<RT, Fut, R>
     where
         RT: RuntimeService,
     {
         Request {
             #[pin]
             fut: Fut,
-            rx: Option<OneshotReceiver<Res>>,
+            rx: Option<OneshotReceiver<R>>,
             timeout: RT::Sleep,
             timeout_response: Option<RT::Sleep>
         },
         Response {
-            rx: OneshotReceiver<Res>,
+            rx: OneshotReceiver<R>,
             timeout_response: Option<RT::Sleep>
         }
     }
@@ -36,12 +46,12 @@ pin_project! {
 
 const TIMEOUT_CONFIGURABLE: &str = "Timeout is not configurable after Request Future is polled";
 
-impl<RT, Fut, Res> MessageRequest<RT, Fut, Res>
+impl<RT, Fut, R> _MessageRequest<RT, Fut, R>
 where
     RT: RuntimeService,
 {
-    pub(crate) fn new(fut: Fut, rx: OneshotReceiver<Res>) -> Self {
-        MessageRequest::Request {
+    pub(crate) fn new(fut: Fut, rx: OneshotReceiver<R>) -> Self {
+        _MessageRequest::Request {
             fut,
             rx: Some(rx),
             timeout: RT::sleep(DEFAULT_TIMEOUT),
@@ -54,12 +64,12 @@ where
     /// Default to 10 seconds.
     pub fn timeout(self, dur: Duration) -> Self {
         match self {
-            MessageRequest::Request {
+            _MessageRequest::Request {
                 fut,
                 rx,
                 timeout_response,
                 ..
-            } => MessageRequest::Request {
+            } => _MessageRequest::Request {
                 fut,
                 rx,
                 timeout: RT::sleep(dur),
@@ -74,9 +84,9 @@ where
     /// Default to no timeout.
     pub fn timeout_response(self, dur: Duration) -> Self {
         match self {
-            MessageRequest::Request {
+            _MessageRequest::Request {
                 fut, rx, timeout, ..
-            } => MessageRequest::Request {
+            } => _MessageRequest::Request {
                 fut,
                 rx,
                 timeout,
@@ -87,12 +97,12 @@ where
     }
 }
 
-impl<RT, Fut, Res> Future for MessageRequest<RT, Fut, Res>
+impl<RT, Fut, R> Future for _MessageRequest<RT, Fut, R>
 where
     RT: RuntimeService,
-    Fut: Future<Output = ActixResult<()>>,
+    Fut: Future<Output = Result<(), ActixAsyncError>>,
 {
-    type Output = ActixResult<Res>;
+    type Output = Result<R, ActixAsyncError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         match self.as_mut().project() {
@@ -106,7 +116,7 @@ where
                     let rx = rx.take().unwrap();
                     let timeout_response = timeout_response.take();
 
-                    self.set(MessageRequest::Response {
+                    self.set(_MessageRequest::Response {
                         rx,
                         timeout_response,
                     });
