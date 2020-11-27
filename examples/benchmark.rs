@@ -62,7 +62,9 @@ mod actix_async_actor {
 
     #[async_trait::async_trait(?Send)]
     impl Handler<ExclusiveMessage> for ActixAsyncActor {
-        async fn handle(&self, _: ExclusiveMessage, _ctx: &Context<Self>) {}
+        async fn handle(&self, _: ExclusiveMessage, _ctx: &Context<Self>) {
+            actix::clock::delay_for(Duration::from_millis(1)).await;
+        }
 
         async fn handle_wait(&mut self, _: ExclusiveMessage, _ctx: &mut Context<Self>) {
             if self.heap_alloc {
@@ -131,7 +133,12 @@ mod actix_actor {
         type Result = ResponseActFuture<Self, ()>;
 
         fn handle(&mut self, _: ConcurrentMessage, _ctx: &mut Context<Self>) -> Self::Result {
-            Box::pin(async {}.into_actor(self))
+            Box::pin(
+                async {
+                    actix::clock::delay_for(Duration::from_millis(1)).await;
+                }
+                .into_actor(self),
+            )
         }
     }
 }

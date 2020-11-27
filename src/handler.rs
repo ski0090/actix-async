@@ -161,7 +161,9 @@ where
         'act: 'res,
         'ctx: 'res,
     {
-        Box::pin(self._handle(move |msg| act.handle(msg, ctx)))
+        let msg = self.msg.take().unwrap();
+        let fut = act.handle(msg, ctx);
+        Box::pin(self._handle(fut))
     }
 
     fn handle_wait<'msg, 'act, 'ctx, 'res>(
@@ -174,7 +176,9 @@ where
         'act: 'res,
         'ctx: 'res,
     {
-        Box::pin(self._handle(move |msg| act.handle_wait(msg, ctx)))
+        let msg = self.msg.take().unwrap();
+        let fut = act.handle_wait(msg, ctx);
+        Box::pin(self._handle(fut))
     }
 
     fn is_taken(&self) -> bool {

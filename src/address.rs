@@ -165,7 +165,7 @@ impl<A: Actor> Addr<A> {
         Self::_send_inner(msg, |obj| self.deref().send(f(obj)))
     }
 
-    fn _send_boxed<M, F>(&self, msg: M, f: F) -> BoxedMessageRequest<'_, A::Runtime, M::Result>
+    fn _send_boxed<M, F>(&self, msg: M, f: F) -> BoxedMessageRequest<A::Runtime, M::Result>
     where
         M: Message + Send,
         A: Handler<M>,

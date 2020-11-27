@@ -4,7 +4,7 @@ pub(crate) mod slab;
 
 pub(crate) mod channel {
     pub(crate) use super::async_channel::{
-        bounded as channel, Receiver, SendFuture, Sender, TryRecvError, WeakSender,
+        bounded as channel, Receiver, SendFuture, Sender, WeakSender,
     };
     pub(crate) use super::async_oneshot::{oneshot, OneshotReceiver, OneshotSender};
 }

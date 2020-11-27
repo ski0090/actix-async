@@ -3,7 +3,6 @@ use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 
 use alloc::boxed::Box;
-use alloc::vec::Vec;
 
 pub(crate) use futures_core::Stream;
 
@@ -84,47 +83,5 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.get_mut().stream).poll_next(cx)
-    }
-}
-
-pub(crate) type JoinFutures = Vec<LocalBoxedFuture<'static, ()>>;
-
-pub(crate) fn join(fut: &mut JoinFutures) -> Join {
-    Join { fut }
-}
-
-pub(crate) struct Join<'a> {
-    fut: &'a mut JoinFutures,
-}
-
-impl Future for Join<'_> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        let mut i = 0;
-        while i < this.fut.len() {
-            if this.fut[i].as_mut().poll(cx).is_ready() {
-                // SAFETY:
-                // Vec::swap_remove with no len check and drop of removed element in place.
-                // i is guaranteed to be smaller than this.fut.len()
-                unsafe {
-                    let len = this.fut.len();
-                    let mut last = core::ptr::read(this.fut.as_ptr().add(len - 1));
-                    let hole = this.fut.as_mut_ptr().add(i);
-                    this.fut.set_len(len - 1);
-                    core::mem::swap(&mut *hole, &mut last);
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        if this.fut.is_empty() {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
     }
 }

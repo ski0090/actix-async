@@ -1,6 +1,8 @@
 use core::cell::{Cell, RefCell};
+use core::future::Future;
 use core::ops::Deref;
 use core::pin::Pin;
+use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
 
 use alloc::boxed::Box;
@@ -13,8 +15,8 @@ use crate::handler::Handler;
 use crate::message::{
     ActorMessage, FunctionMessage, FunctionMutMessage, IntervalMessage, Message, MessageObject,
 };
-use crate::util::channel::{OneshotSender, Receiver, TryRecvError};
-use crate::util::futures::{cancelable, join, next, JoinFutures, LocalBoxedFuture, Stream};
+use crate::util::channel::{OneshotSender, Receiver};
+use crate::util::futures::{cancelable, next, LocalBoxedFuture, Stream};
 use crate::util::slab::Slab;
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
@@ -239,53 +241,6 @@ impl<A: Actor> Context<A> {
         ContextJoinHandle { handle }
     }
 
-    async fn try_handle_concurrent(
-        &mut self,
-        actor: &A,
-        cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut JoinFutures,
-    ) {
-        if !cache_ref.is_empty() {
-            cache_ref.iter_mut().for_each(|m| {
-                /*
-                    SAFETY:
-                    `JoinFutures` is a type alias for `Vec<LocalBoxedFuture<'static, ()>>`.
-
-                    It can not tie to actor and context's lifetime. The reason is that it has no
-                    idea the futures are all resolved in this scope and would assume the boxed
-                    futures would live as long as the actor and context. Making it impossible to
-                    mutably borrow them from this point forward.
-
-                    All futures transmuted to static lifetime must resolved before exiting
-                    try_handle_concurrent method.
-                */
-                fut.push(unsafe { core::mem::transmute(m.handle(actor, self)) });
-            });
-
-            // join would poll all futures and only resolve when JoinFutures is empty.
-            join(fut).await;
-
-            // clear the cache as they are all finished.
-            cache_ref.clear();
-        }
-    }
-
-    async fn handle_exclusive(
-        &mut self,
-        msg: MessageObject<A>,
-        actor: &mut A,
-        cache_mut: &mut Option<MessageObject<A>>,
-        cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut JoinFutures,
-    ) {
-        // put message in cache in case thread panic before it's handled
-        *cache_mut = Some(msg);
-        // try handle concurrent messages first.
-        self.try_handle_concurrent(&*actor, cache_ref, fut).await;
-        // pop the cache and handle
-        cache_mut.take().unwrap().handle_wait(actor, self).await;
-    }
-
     fn handle_delay_cancel(&mut self, token: usize) {
         let queue = self.delay_queue.get_mut();
         if queue.contains(token) {
@@ -297,72 +252,6 @@ impl<A: Actor> Context<A> {
         let queue = self.interval_queue.get_mut();
         if queue.contains(token) {
             queue.remove(token);
-        }
-    }
-
-    // handle single message and return true if context is force stopping.
-    async fn handle_message(
-        &mut self,
-        msg: ActorMessage<A>,
-        actor: &mut A,
-        cache_mut: &mut Option<MessageObject<A>>,
-        cache_ref: &mut Vec<MessageObject<A>>,
-        drop_notify: &mut Option<OneshotSender<()>>,
-        fut: &mut JoinFutures,
-    ) -> bool {
-        match msg {
-            ActorMessage::Ref(msg) => cache_ref.push(msg),
-            ActorMessage::Mut(msg) => {
-                self.handle_exclusive(msg, actor, cache_mut, cache_ref, fut)
-                    .await
-            }
-            ActorMessage::DelayToken(token) => {
-                let queue = self.delay_queue.get_mut();
-
-                if queue.contains(token) {
-                    let msg = queue.remove(token);
-                    self.handle_queued_message(msg, actor, cache_mut, cache_ref, fut)
-                        .await;
-                }
-            }
-            ActorMessage::IntervalToken(token) => {
-                let msg = match self.interval_queue.get_mut().get(token) {
-                    Some(msg) => msg.clone_message(),
-                    None => return false,
-                };
-                self.handle_queued_message(msg, actor, cache_mut, cache_ref, fut)
-                    .await;
-            }
-            ActorMessage::DelayTokenCancel(token) => self.handle_delay_cancel(token),
-            ActorMessage::IntervalTokenCancel(token) => self.handle_interval_cancel(token),
-            ActorMessage::ActorState(state, notify) => {
-                *drop_notify = notify;
-                if state != ActorState::Running {
-                    self.stop();
-                };
-
-                return state == ActorState::Stop;
-            }
-        };
-
-        false
-    }
-
-    async fn handle_queued_message(
-        &mut self,
-        msg: ActorMessage<A>,
-        actor: &mut A,
-        cache_mut: &mut Option<MessageObject<A>>,
-        cache_ref: &mut Vec<MessageObject<A>>,
-        fut: &mut JoinFutures,
-    ) {
-        match msg {
-            ActorMessage::Ref(msg) => cache_ref.push(msg),
-            ActorMessage::Mut(msg) => {
-                self.handle_exclusive(msg, actor, cache_mut, cache_ref, fut)
-                    .await
-            }
-            _ => unreachable!("Queued message can only be ActorMessage::Ref or ActorMessage::Mut"),
         }
     }
 
@@ -378,9 +267,13 @@ pub(crate) struct ContextWithActor<A: Actor> {
     ctx: Context<A>,
     actor: A,
     cache_mut: Option<MessageObject<A>>,
-    cache_ref: Vec<MessageObject<A>>,
+    cache_ref: Slab<MessageObject<A>>,
+    fut: Vec<(usize, LocalBoxedFuture<'static, ()>)>,
+    fut_mut: Option<LocalBoxedFuture<'static, ()>>,
     drop_notify: Option<OneshotSender<()>>,
 }
+
+impl<A: Actor> Unpin for ContextWithActor<A> {}
 
 impl<A: Actor> Drop for ContextWithActor<A> {
     fn drop(&mut self) {
@@ -408,8 +301,10 @@ impl<A: Actor> ContextWithActor<A> {
             actor,
             ctx,
             cache_mut: None,
-            cache_ref: Vec::with_capacity(CHANNEL_CAP),
+            cache_ref: Slab::with_capacity(CHANNEL_CAP),
             drop_notify: None,
+            fut: Vec::with_capacity(CHANNEL_CAP),
+            fut_mut: None,
         }
     }
 
@@ -424,62 +319,183 @@ impl<A: Actor> ContextWithActor<A> {
     }
 
     async fn run(&mut self) {
-        let actor = &mut self.actor;
-        let ctx = &mut self.ctx;
-        let cache_mut = &mut self.cache_mut;
-        let cache_ref = &mut self.cache_ref;
-        let drop_notify = &mut self.drop_notify;
+        (&mut *self).await;
 
-        let fut = &mut JoinFutures::with_capacity(CHANNEL_CAP);
+        {
+            let actor = &mut self.actor;
+            let ctx = &mut self.ctx;
+            actor.on_stop(ctx).await;
+        }
+    }
 
-        // if there is cached message it must be dealt with
-        ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;
+    fn add_concurrent_msg(&mut self, msg: MessageObject<A>) {
+        // TODO: figure out how move MessageObject to Context.fut directly.
+        let key = self.cache_ref.insert(msg);
+        /*
+            SAFETY:
+            `ContextWithActor.fut`can not tie to actor and context's lifetime. The reason is it
+            would assume the boxed futures would live as long as the actor and context. Making it
+            impossible to mutably borrow them from this point forward.
 
-        if let Some(mut msg) = cache_mut.take() {
-            msg.handle_wait(actor, ctx).await;
+            All futures transmuted to static lifetime in cache_ref must resolved before next
+            cache_mut future get polled
+        */
+        let fut = unsafe {
+            core::mem::transmute(
+                self.cache_ref
+                    .get_mut(key)
+                    .unwrap()
+                    .handle(&self.actor, &self.ctx),
+            )
+        };
+        self.fut.push((key, fut));
+    }
+
+    fn add_exclusive_msg(&mut self, msg: MessageObject<A>) {
+        self.cache_mut = Some(msg);
+        /*
+            SAFETY:
+            `ContextWithActor.fut_mut`can not tie to actor and context's lifetime. The reason is it
+            would assume the boxed futures would live as long as the actor and context. Making it
+            impossible to mutably borrow them from this point forward.
+
+            cache_mut future transmute to static lifetime must be polled when cache_ref is empty.
+        */
+        let fut = unsafe {
+            core::mem::transmute(
+                self.cache_mut
+                    .as_mut()
+                    .unwrap()
+                    .handle_wait(&mut self.actor, &mut self.ctx),
+            )
+        };
+        self.fut_mut = Some(fut);
+    }
+}
+
+impl<A: Actor> Future for ContextWithActor<A> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().get_mut();
+
+        // poll concurrent messages
+        let mut i = 0;
+        while i < this.fut.len() {
+            if this.fut[i].1.as_mut().poll(cx).is_ready() {
+                this.cache_ref.remove(this.fut[i].0);
+                // SAFETY:
+                // Vec::swap_remove with no len check and drop of removed element in place.
+                // i is guaranteed to be smaller than this.fut.len()
+                unsafe {
+                    let len = this.fut.len();
+                    let mut last = core::ptr::read(this.fut.as_ptr().add(len - 1));
+                    let hole = this.fut.as_mut_ptr().add(i);
+                    this.fut.set_len(len - 1);
+                    core::mem::swap(&mut *hole, &mut last);
+                }
+            } else {
+                i += 1;
+            }
         }
 
-        // batch receive new messages from channel.
-        loop {
-            match ctx.rx.try_recv() {
-                Ok(msg) => {
-                    let is_force_stop = ctx
-                        .handle_message(msg, actor, cache_mut, cache_ref, drop_notify, fut)
-                        .await;
+        // try to poll exclusive message.
+        if let Some(fut_mut) = this.fut_mut.as_mut() {
+            // still have concurrent messages. finish them.
+            if !this.fut.is_empty() {
+                return Poll::Pending;
+            }
 
-                    if is_force_stop {
-                        break;
-                    }
+            // poll exclusive message and remove it when success.
+            match fut_mut.as_mut().poll(cx) {
+                Poll::Ready(_) => {
+                    this.fut_mut = None;
+                    this.cache_mut = None;
                 }
-                Err(TryRecvError::Empty) => {
-                    // channel is empty. try to handle concurrent messages from previous iters.
-                    ctx.try_handle_concurrent(actor, cache_ref, fut).await;
+                Poll::Pending => return Poll::Pending,
+            }
+        }
 
-                    // block the task and recv one message when channel is empty.
-                    match ctx.rx.recv().await {
-                        Ok(msg) => {
-                            let is_force_stop = ctx
-                                .handle_message(msg, actor, cache_mut, cache_ref, drop_notify, fut)
-                                .await;
+        // no cache message at this point. can stop gracefully.
+        match this.ctx.state.get() {
+            ActorState::Running => {}
+            ActorState::StopGraceful if !this.fut.is_empty() || this.fut_mut.is_some() => {
+                return Poll::Pending;
+            }
+            ActorState::StopGraceful | ActorState::Stop => return Poll::Ready(()),
+        }
 
-                            if is_force_stop {
-                                break;
+        let mut new = false;
+
+        loop {
+            match Pin::new(&mut this.ctx.rx).poll_next(cx) {
+                Poll::Ready(Some(msg)) => match msg {
+                    ActorMessage::Ref(msg) => {
+                        new = true;
+                        this.add_concurrent_msg(msg)
+                    }
+                    ActorMessage::Mut(msg) => {
+                        this.add_exclusive_msg(msg);
+                        return self.poll(cx);
+                    }
+                    ActorMessage::DelayToken(token) => {
+                        let queue = this.ctx.delay_queue.get_mut();
+
+                        if queue.contains(token) {
+                            match queue.remove(token) {
+                                ActorMessage::Ref(msg) => {
+                                    new = true;
+                                    this.add_concurrent_msg(msg)
+                                }
+                                ActorMessage::Mut(msg) => {
+                                    this.add_exclusive_msg(msg);
+                                    return self.poll(cx);
+                                }
+                                _ => {}
                             }
                         }
-                        Err(_) => break,
                     }
+                    ActorMessage::IntervalToken(token) => {
+                        let msg = match this.ctx.interval_queue.get_mut().get(token) {
+                            Some(msg) => msg.clone_message(),
+                            None => continue,
+                        };
+                        match msg {
+                            ActorMessage::Ref(msg) => {
+                                new = true;
+                                this.add_concurrent_msg(msg)
+                            }
+                            ActorMessage::Mut(msg) => {
+                                this.add_exclusive_msg(msg);
+                                return self.poll(cx);
+                            }
+                            _ => {}
+                        }
+                    }
+                    ActorMessage::DelayTokenCancel(token) => this.ctx.handle_delay_cancel(token),
+                    ActorMessage::IntervalTokenCancel(token) => {
+                        this.ctx.handle_interval_cancel(token)
+                    }
+                    ActorMessage::ActorState(state, notify) => {
+                        this.drop_notify = notify;
+                        match state {
+                            ActorState::StopGraceful => {
+                                this.ctx.stop();
+                            }
+                            ActorState::Stop => {
+                                this.ctx.stop();
+                                return Poll::Ready(());
+                            }
+                            _ => (),
+                        }
+                    }
+                },
+                Poll::Ready(None) => {
+                    this.ctx.stop();
+                    return self.poll(cx);
                 }
-                Err(TryRecvError::Closed) => {
-                    // channel is closed. stop the context.
-                    ctx.stop();
-                    // try to handle concurrent messages from previous iters.
-                    ctx.try_handle_concurrent(&*actor, cache_ref, fut).await;
-
-                    break;
-                }
-            };
+                Poll::Pending => return if new { self.poll(cx) } else { Poll::Pending },
+            }
         }
-
-        actor.on_stop(ctx).await;
     }
 }

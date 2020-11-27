@@ -24,7 +24,6 @@ pub type BoxedMessageRequest<'a, RT, R> =
     _MessageRequest<RT, LocalBoxedFuture<'a, Result<(), ActixAsyncError>>, R>;
 
 pin_project! {
-    #[doc(hidden)]
     #[project = MessageRequestProj]
     pub enum _MessageRequest<RT, Fut, R>
     where

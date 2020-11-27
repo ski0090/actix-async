@@ -19,6 +19,7 @@ use cache_padded::CachePadded;
 use spin::{Mutex, MutexGuard};
 
 use crate::error::ActixAsyncError;
+use crate::util::futures::Stream;
 use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
 
 struct Channel<T> {
@@ -62,7 +63,10 @@ pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     let s = Sender {
         channel: channel.clone(),
     };
-    let r = Receiver { channel };
+    let r = Receiver {
+        channel,
+        listener: None,
+    };
     (s, r)
 }
 
@@ -213,6 +217,7 @@ impl<T> WeakSender<T> {
 
 pub struct Receiver<T> {
     channel: RefCounter<Channel<T>>,
+    listener: Option<EventListener>,
 }
 
 impl<T> Receiver<T> {
@@ -273,6 +278,49 @@ impl<T> Receiver<T> {
     }
 }
 
+impl<T> Stream for Receiver<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            // If this stream is listening for events, first wait for a notification.
+            if let Some(listener) = self.listener.as_mut() {
+                futures_core::ready!(Pin::new(listener).poll(cx));
+                self.listener = None;
+            }
+
+            loop {
+                // Attempt to receive a message.
+                match self.try_recv() {
+                    Ok(msg) => {
+                        // The stream is not blocked on an event - drop the listener.
+                        self.listener = None;
+                        return Poll::Ready(Some(msg));
+                    }
+                    Err(TryRecvError::Closed) => {
+                        // The stream is not blocked on an event - drop the listener.
+                        self.listener = None;
+                        return Poll::Ready(None);
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+
+                // Receiving failed - now start listening for notifications or wait for one.
+                match self.listener.as_mut() {
+                    None => {
+                        // Create a listener and try sending the message again.
+                        self.listener = Some(self.channel.stream_ops.listen());
+                    }
+                    Some(_) => {
+                        // Go back to the outer loop to poll the listener.
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         // Decrement the receiver count and close the channel if it drops down to zero.
@@ -299,6 +347,7 @@ impl<T> Clone for Receiver<T> {
 
         Receiver {
             channel: self.channel.clone(),
+            listener: None,
         }
     }
 }
