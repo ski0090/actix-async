@@ -1,4 +1,3 @@
-use core::future::Future;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
@@ -83,18 +82,11 @@ where
     type Result = R;
 }
 
-pub(crate) enum IntervalMessage<A> {
-    Ref(Box<dyn MessageObjectClone<A>>),
-    Mut(Box<dyn MessageObjectClone<A>>),
-}
-
-impl<A: Actor> IntervalMessage<A> {
-    pub(crate) fn clone_message(&self) -> ActorMessage<A> {
-        match self {
-            Self::Ref(ref obj) => ActorMessage::Ref(obj.clone_object()),
-            Self::Mut(ref obj) => ActorMessage::Mut(obj.clone_object()),
-        }
-    }
+pub(crate) enum DelayMessage<A> {
+    DelayRef(MessageObject<A>),
+    DelayMut(MessageObject<A>),
+    IntervalRef(Box<dyn MessageObjectClone<A>>),
+    IntervalMut(Box<dyn MessageObjectClone<A>>),
 }
 
 pub(crate) trait MessageObjectClone<A> {
@@ -155,32 +147,10 @@ pub(crate) struct MessageHandlerContainer<M: Message> {
     pub(crate) tx: Option<OneshotSender<M::Result>>,
 }
 
-impl<M: Message> MessageHandlerContainer<M> {
-    // give the ownership of message type to closure.
-    pub(crate) async fn _handle<Fut>(&mut self, fut: Fut)
-    where
-        Fut: Future<Output = M::Result>,
-    {
-        match self.tx.take() {
-            Some(tx) => {
-                if !tx.is_closed() {
-                    let res = fut.await;
-                    let _ = tx.send(res);
-                }
-            }
-            None => {
-                let _ = fut.await;
-            }
-        }
-    }
-}
-
 pub enum ActorMessage<A> {
     Ref(MessageObject<A>),
     Mut(MessageObject<A>),
     ActorState(ActorState, Option<OneshotSender<()>>),
     DelayToken(usize),
     DelayTokenCancel(usize),
-    IntervalToken(usize),
-    IntervalTokenCancel(usize),
 }
