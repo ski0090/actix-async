@@ -123,27 +123,17 @@ where
 }
 
 pub trait MessageHandler<A: Actor> {
-    fn handle<'msg, 'act, 'ctx, 'res>(
+    fn handle<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act A,
         ctx: &'ctx Context<A>,
-    ) -> LocalBoxedFuture<'res, ()>
-    where
-        'msg: 'res,
-        'act: 'res,
-        'ctx: 'res;
+    ) -> LocalBoxedFuture<'static, ()>;
 
-    fn handle_wait<'msg, 'act, 'ctx, 'res>(
+    fn handle_wait<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act mut A,
         ctx: &'ctx mut Context<A>,
-    ) -> LocalBoxedFuture<'res, ()>
-    where
-        'msg: 'res,
-        'act: 'res,
-        'ctx: 'res;
-
-    fn is_taken(&self) -> bool;
+    ) -> LocalBoxedFuture<'static, ()>;
 }
 
 impl<A, M> MessageHandler<A> for MessageHandlerContainer<M>
@@ -151,37 +141,73 @@ where
     A: Actor + Handler<M>,
     M: Message,
 {
-    fn handle<'msg, 'act, 'ctx, 'res>(
+    fn handle<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act A,
         ctx: &'ctx Context<A>,
-    ) -> LocalBoxedFuture<'res, ()>
-    where
-        'msg: 'res,
-        'act: 'res,
-        'ctx: 'res,
-    {
+    ) -> LocalBoxedFuture<'static, ()> {
         let msg = self.msg.take().unwrap();
-        let fut = act.handle(msg, ctx);
-        Box::pin(self._handle(fut))
+        let tx = self.tx.take();
+
+        /*
+            SAFETY:
+            `MessageHandler::handle`can not tie to actor and context's lifetime. The reason is it
+            would assume the boxed futures would live as long as the actor and context. Making it
+            impossible to mutably borrow them from this point forward.
+
+            futures transmuted to static lifetime in ContextWithActor.cache_ref must resolved
+            before next ContextWithActor.cache_mut get polled
+        */
+        let act: &'static A = unsafe { core::mem::transmute(act) };
+        let ctx: &'static Context<A> = unsafe { core::mem::transmute(ctx) };
+
+        Box::pin(async move {
+            match tx {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = act.handle(msg, ctx).await;
+                        let _ = tx.send(res);
+                    }
+                }
+                None => {
+                    let _ = act.handle(msg, ctx).await;
+                }
+            }
+        })
     }
 
-    fn handle_wait<'msg, 'act, 'ctx, 'res>(
+    fn handle_wait<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act mut A,
         ctx: &'ctx mut Context<A>,
-    ) -> LocalBoxedFuture<'res, ()>
-    where
-        'msg: 'res,
-        'act: 'res,
-        'ctx: 'res,
-    {
+    ) -> LocalBoxedFuture<'static, ()> {
         let msg = self.msg.take().unwrap();
-        let fut = act.handle_wait(msg, ctx);
-        Box::pin(self._handle(fut))
-    }
+        let tx = self.tx.take();
 
-    fn is_taken(&self) -> bool {
-        self.msg.is_some()
+        /*
+            SAFETY:
+            `MessageHandler::handle_wait`can not tie to actor and context's lifetime. The reason is
+            it would assume the boxed futures would live as long as the actor and context. Making it
+            impossible to mutably borrow them again from this point forward.
+
+            future transmute to static lifetime must be polled only when ContextWithActor.cache_ref
+            is empty.
+        */
+        let act: &'static mut A = unsafe { core::mem::transmute(act) };
+        let ctx: &'static mut Context<A> = unsafe { core::mem::transmute(ctx) };
+
+        Box::pin(async move {
+            match tx {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = act.handle_wait(msg, ctx).await;
+                        let _ = tx.send(res);
+                    }
+                }
+                None => {
+                    let _ = act.handle_wait(msg, ctx).await;
+                }
+            }
+        })
     }
 }

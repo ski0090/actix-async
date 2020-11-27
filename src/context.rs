@@ -266,10 +266,8 @@ impl<A: Actor> Context<A> {
 pub(crate) struct ContextWithActor<A: Actor> {
     ctx: Context<A>,
     actor: A,
-    cache_mut: Option<MessageObject<A>>,
-    cache_ref: Slab<MessageObject<A>>,
-    fut: Vec<(usize, LocalBoxedFuture<'static, ()>)>,
-    fut_mut: Option<LocalBoxedFuture<'static, ()>>,
+    cache_mut: Option<LocalBoxedFuture<'static, ()>>,
+    cache_ref: Vec<LocalBoxedFuture<'static, ()>>,
     drop_notify: Option<OneshotSender<()>>,
 }
 
@@ -277,18 +275,6 @@ impl<A: Actor> Unpin for ContextWithActor<A> {}
 
 impl<A: Actor> Drop for ContextWithActor<A> {
     fn drop(&mut self) {
-        // // recovery from thread panic.
-        // if self.ctx.as_ref().unwrap().state.get() == ActorState::Running {
-        //     let mut ctx = core::mem::take(self);
-        //     // some of the cached message object may gone. remove them.
-        //     ctx.cache_ref.retain(|m| !m.is_taken());
-        //
-        //     A::spawn(async move {
-        //         let _ = ctx.run().await;
-        //     });
-        // } else if let Some(tx) = self.drop_notify.take() {
-        //     let _ = tx.send(());
-        // }
         if let Some(tx) = self.drop_notify.take() {
             let _ = tx.send(());
         }
@@ -301,10 +287,8 @@ impl<A: Actor> ContextWithActor<A> {
             actor,
             ctx,
             cache_mut: None,
-            cache_ref: Slab::with_capacity(CHANNEL_CAP),
+            cache_ref: Vec::with_capacity(CHANNEL_CAP),
             drop_notify: None,
-            fut: Vec::with_capacity(CHANNEL_CAP),
-            fut_mut: None,
         }
     }
 
@@ -328,48 +312,12 @@ impl<A: Actor> ContextWithActor<A> {
         }
     }
 
-    fn add_concurrent_msg(&mut self, msg: MessageObject<A>) {
-        // TODO: figure out how move MessageObject to Context.fut directly.
-        let key = self.cache_ref.insert(msg);
-        /*
-            SAFETY:
-            `ContextWithActor.fut`can not tie to actor and context's lifetime. The reason is it
-            would assume the boxed futures would live as long as the actor and context. Making it
-            impossible to mutably borrow them from this point forward.
-
-            All futures transmuted to static lifetime in cache_ref must resolved before next
-            cache_mut future get polled
-        */
-        let fut = unsafe {
-            core::mem::transmute(
-                self.cache_ref
-                    .get_mut(key)
-                    .unwrap()
-                    .handle(&self.actor, &self.ctx),
-            )
-        };
-        self.fut.push((key, fut));
+    fn add_concurrent_msg(&mut self, mut msg: MessageObject<A>) {
+        self.cache_ref.push(msg.handle(&self.actor, &self.ctx));
     }
 
-    fn add_exclusive_msg(&mut self, msg: MessageObject<A>) {
-        self.cache_mut = Some(msg);
-        /*
-            SAFETY:
-            `ContextWithActor.fut_mut`can not tie to actor and context's lifetime. The reason is it
-            would assume the boxed futures would live as long as the actor and context. Making it
-            impossible to mutably borrow them from this point forward.
-
-            cache_mut future transmute to static lifetime must be polled when cache_ref is empty.
-        */
-        let fut = unsafe {
-            core::mem::transmute(
-                self.cache_mut
-                    .as_mut()
-                    .unwrap()
-                    .handle_wait(&mut self.actor, &mut self.ctx),
-            )
-        };
-        self.fut_mut = Some(fut);
+    fn add_exclusive_msg(&mut self, mut msg: MessageObject<A>) {
+        self.cache_mut = Some(msg.handle_wait(&mut self.actor, &mut self.ctx));
     }
 }
 
@@ -381,17 +329,16 @@ impl<A: Actor> Future for ContextWithActor<A> {
 
         // poll concurrent messages
         let mut i = 0;
-        while i < this.fut.len() {
-            if this.fut[i].1.as_mut().poll(cx).is_ready() {
-                this.cache_ref.remove(this.fut[i].0);
+        while i < this.cache_ref.len() {
+            if this.cache_ref[i].as_mut().poll(cx).is_ready() {
                 // SAFETY:
                 // Vec::swap_remove with no len check and drop of removed element in place.
                 // i is guaranteed to be smaller than this.fut.len()
                 unsafe {
-                    let len = this.fut.len();
-                    let mut last = core::ptr::read(this.fut.as_ptr().add(len - 1));
-                    let hole = this.fut.as_mut_ptr().add(i);
-                    this.fut.set_len(len - 1);
+                    let len = this.cache_ref.len();
+                    let mut last = core::ptr::read(this.cache_ref.as_ptr().add(len - 1));
+                    let hole = this.cache_ref.as_mut_ptr().add(i);
+                    this.cache_ref.set_len(len - 1);
                     core::mem::swap(&mut *hole, &mut last);
                 }
             } else {
@@ -400,16 +347,15 @@ impl<A: Actor> Future for ContextWithActor<A> {
         }
 
         // try to poll exclusive message.
-        if let Some(fut_mut) = this.fut_mut.as_mut() {
+        if let Some(fut_mut) = this.cache_mut.as_mut() {
             // still have concurrent messages. finish them.
-            if !this.fut.is_empty() {
+            if !this.cache_ref.is_empty() {
                 return Poll::Pending;
             }
 
             // poll exclusive message and remove it when success.
             match fut_mut.as_mut().poll(cx) {
                 Poll::Ready(_) => {
-                    this.fut_mut = None;
                     this.cache_mut = None;
                 }
                 Poll::Pending => return Poll::Pending,
@@ -419,48 +365,36 @@ impl<A: Actor> Future for ContextWithActor<A> {
         // no cache message at this point. can stop gracefully.
         match this.ctx.state.get() {
             ActorState::Running => {}
-            ActorState::StopGraceful if !this.fut.is_empty() || this.fut_mut.is_some() => {
+            ActorState::StopGraceful if !this.cache_ref.is_empty() || this.cache_mut.is_some() => {
                 return Poll::Pending;
             }
             ActorState::StopGraceful | ActorState::Stop => return Poll::Ready(()),
         }
 
+        // flag indicate if return pending all poll an extra round.
         let mut new = false;
 
+        // actively drain receiver channel for incoming messages.
         loop {
             match Pin::new(&mut this.ctx.rx).poll_next(cx) {
-                Poll::Ready(Some(msg)) => match msg {
-                    ActorMessage::Ref(msg) => {
-                        new = true;
-                        this.add_concurrent_msg(msg)
-                    }
-                    ActorMessage::Mut(msg) => {
-                        this.add_exclusive_msg(msg);
-                        return self.poll(cx);
-                    }
-                    ActorMessage::DelayToken(token) => {
-                        let queue = this.ctx.delay_queue.get_mut();
+                // new concurrent message. add it to CacheRef and fut.
+                Poll::Ready(Some(ActorMessage::Ref(msg))) => {
+                    new = true;
+                    this.add_concurrent_msg(msg)
+                }
+                // new exclusive message. add it to CacheMut. No new messages should be accepted
+                // until this one is resolved.
+                Poll::Ready(Some(ActorMessage::Mut(msg))) => {
+                    this.add_exclusive_msg(msg);
+                    return self.poll(cx);
+                }
+                // context_delay queue is treat the same as receiver.
+                // add new concurrent messages or return with new exclusive.
+                Poll::Ready(Some(ActorMessage::DelayToken(token))) => {
+                    let queue = this.ctx.delay_queue.get_mut();
 
-                        if queue.contains(token) {
-                            match queue.remove(token) {
-                                ActorMessage::Ref(msg) => {
-                                    new = true;
-                                    this.add_concurrent_msg(msg)
-                                }
-                                ActorMessage::Mut(msg) => {
-                                    this.add_exclusive_msg(msg);
-                                    return self.poll(cx);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    ActorMessage::IntervalToken(token) => {
-                        let msg = match this.ctx.interval_queue.get_mut().get(token) {
-                            Some(msg) => msg.clone_message(),
-                            None => continue,
-                        };
-                        match msg {
+                    if queue.contains(token) {
+                        match queue.remove(token) {
                             ActorMessage::Ref(msg) => {
                                 new = true;
                                 this.add_concurrent_msg(msg)
@@ -472,28 +406,49 @@ impl<A: Actor> Future for ContextWithActor<A> {
                             _ => {}
                         }
                     }
-                    ActorMessage::DelayTokenCancel(token) => this.ctx.handle_delay_cancel(token),
-                    ActorMessage::IntervalTokenCancel(token) => {
-                        this.ctx.handle_interval_cancel(token)
-                    }
-                    ActorMessage::ActorState(state, notify) => {
-                        this.drop_notify = notify;
-                        match state {
-                            ActorState::StopGraceful => {
-                                this.ctx.stop();
-                            }
-                            ActorState::Stop => {
-                                this.ctx.stop();
-                                return Poll::Ready(());
-                            }
-                            _ => (),
+                }
+                // similar to delay_queue.
+                Poll::Ready(Some(ActorMessage::IntervalToken(token))) => {
+                    let msg = match this.ctx.interval_queue.get_mut().get(token) {
+                        Some(msg) => msg.clone_message(),
+                        None => continue,
+                    };
+                    match msg {
+                        ActorMessage::Ref(msg) => {
+                            new = true;
+                            this.add_concurrent_msg(msg)
                         }
+                        ActorMessage::Mut(msg) => {
+                            this.add_exclusive_msg(msg);
+                            return self.poll(cx);
+                        }
+                        _ => {}
                     }
-                },
+                }
+                Poll::Ready(Some(ActorMessage::DelayTokenCancel(token))) => {
+                    this.ctx.handle_delay_cancel(token)
+                }
+                Poll::Ready(Some(ActorMessage::IntervalTokenCancel(token))) => {
+                    this.ctx.handle_interval_cancel(token)
+                }
+                Poll::Ready(Some(ActorMessage::ActorState(state, notify))) => {
+                    this.drop_notify = notify;
+                    match state {
+                        ActorState::StopGraceful => {
+                            this.ctx.stop();
+                        }
+                        ActorState::Stop => {
+                            this.ctx.stop();
+                            return Poll::Ready(());
+                        }
+                        _ => (),
+                    }
+                }
                 Poll::Ready(None) => {
                     this.ctx.stop();
                     return self.poll(cx);
                 }
+                // if we have new concurrent messages then run an extra poll.
                 Poll::Pending => return if new { self.poll(cx) } else { Poll::Pending },
             }
         }

@@ -231,40 +231,6 @@ impl<T> Receiver<T> {
         })
     }
 
-    pub async fn recv(&self) -> Result<T, RecvError> {
-        let mut listener = None;
-
-        loop {
-            // Attempt to receive a message.
-            match self.try_recv() {
-                Ok(msg) => {
-                    // If the capacity is larger than 1, notify another blocked receive operation.
-                    // There is no need to notify stream operations because all of them get
-                    // notified every time a message is sent into the channel.
-                    match self.channel.queue.capacity() {
-                        1 => {}
-                        _ => self.channel.recv_ops.notify(1),
-                    }
-                    return Ok(msg);
-                }
-                Err(TryRecvError::Closed) => return Err(RecvError),
-                Err(TryRecvError::Empty) => {}
-            }
-
-            // Receiving failed - now start listening for notifications or wait for one.
-            match listener.take() {
-                None => {
-                    // Start listening and then try receiving again.
-                    listener = Some(self.channel.recv_ops.listen());
-                }
-                Some(l) => {
-                    // Wait for a notification.
-                    l.await;
-                }
-            }
-        }
-    }
-
     pub fn as_sender(&self) -> Option<Sender<T>> {
         if self.channel.queue.is_closed() {
             None
@@ -356,8 +322,6 @@ pub enum TrySendError<T> {
     Full(T),
     Closed(T),
 }
-
-pub struct RecvError;
 
 pub enum TryRecvError {
     Empty,

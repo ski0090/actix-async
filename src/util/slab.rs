@@ -40,13 +40,6 @@ impl<T> Slab<T> {
         }
     }
 
-    pub fn get_mut(&mut self, key: usize) -> Option<&mut T> {
-        match self.entries.get_mut(key) {
-            Some(&mut Entry::Occupied(ref mut val)) => Some(val),
-            _ => None,
-        }
-    }
-
     pub fn insert(&mut self, val: T) -> usize {
         let key = self.next;
 
