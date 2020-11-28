@@ -6,7 +6,7 @@ use crate::actor::Actor;
 use crate::context::Context;
 use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};
 use crate::util::channel::OneshotSender;
-use crate::util::futures::LocalBoxedFuture;
+use crate::util::futures::LocalBoxFuture;
 
 /// Trait define how actor handle a message.
 /// # example:
@@ -34,7 +34,7 @@ use crate::util::futures::LocalBoxedFuture;
 ///
 /// // impl boxed future manually without async_trait.
 /// impl Handler<TestMessage2> for TestActor {
-///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: &'c Context<Self>) -> LocalBoxedFuture<'r, ()> {
+///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: &'c Context<Self>) -> LocalBoxFuture<'r, ()> {
 ///         Box::pin(async move {
 ///             let _this = self;
 ///             let _ctx = ctx;
@@ -54,7 +54,7 @@ where
         &'act self,
         msg: M,
         ctx: &'ctx Context<Self>,
-    ) -> LocalBoxedFuture<'res, M::Result>
+    ) -> LocalBoxFuture<'res, M::Result>
     where
         'act: 'res,
         'ctx: 'res;
@@ -65,7 +65,7 @@ where
         &'act mut self,
         msg: M,
         ctx: &'ctx mut Context<Self>,
-    ) -> LocalBoxedFuture<'res, M::Result>
+    ) -> LocalBoxFuture<'res, M::Result>
     where
         'act: 'res,
         'ctx: 'res,
@@ -78,14 +78,14 @@ where
 impl<A, F, R> Handler<FunctionMessage<F, R>> for A
 where
     A: Actor,
-    F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxedFuture<'a, R> + 'static,
+    F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         msg: FunctionMessage<F, R>,
         ctx: &'ctx Context<Self>,
-    ) -> LocalBoxedFuture<'res, R>
+    ) -> LocalBoxFuture<'res, R>
     where
         'act: 'res,
         'ctx: 'res,
@@ -97,14 +97,14 @@ where
 impl<A, F, R> Handler<FunctionMutMessage<F, R>> for A
 where
     A: Actor,
-    F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxedFuture<'a, R> + 'static,
+    F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         _: FunctionMutMessage<F, R>,
         _: &'ctx Context<Self>,
-    ) -> LocalBoxedFuture<'res, R>
+    ) -> LocalBoxFuture<'res, R>
     where
         'act: 'res,
         'ctx: 'res,
@@ -116,7 +116,7 @@ where
         &'act mut self,
         msg: FunctionMutMessage<F, R>,
         ctx: &'ctx mut Context<Self>,
-    ) -> LocalBoxedFuture<'res, R>
+    ) -> LocalBoxFuture<'res, R>
     where
         'act: 'res,
         'ctx: 'res,
@@ -130,13 +130,13 @@ pub trait MessageHandler<A: Actor> {
         &'msg mut self,
         act: &'act A,
         ctx: &'ctx Context<A>,
-    ) -> LocalBoxedFuture<'static, ()>;
+    ) -> LocalBoxFuture<'static, ()>;
 
     fn handle_wait<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act mut A,
         ctx: &'ctx mut Context<A>,
-    ) -> LocalBoxedFuture<'static, ()>;
+    ) -> LocalBoxFuture<'static, ()>;
 }
 
 impl<A, M> MessageHandler<A> for MessageHandlerContainer<M>
@@ -148,7 +148,7 @@ where
         &'msg mut self,
         act: &'act A,
         ctx: &'ctx Context<A>,
-    ) -> LocalBoxedFuture<'static, ()> {
+    ) -> LocalBoxFuture<'static, ()> {
         let msg = self.msg.take().unwrap();
         let tx = self.tx.take();
 
@@ -173,7 +173,7 @@ where
         &'msg mut self,
         act: &'act mut A,
         ctx: &'ctx mut Context<A>,
-    ) -> LocalBoxedFuture<'static, ()> {
+    ) -> LocalBoxFuture<'static, ()> {
         let msg = self.msg.take().unwrap();
         let tx = self.tx.take();
 
@@ -195,7 +195,7 @@ where
     }
 }
 
-fn handle<F>(tx: Option<OneshotSender<F::Output>>, fut: F) -> LocalBoxedFuture<'static, ()>
+fn handle<F>(tx: Option<OneshotSender<F::Output>>, fut: F) -> LocalBoxFuture<'static, ()>
 where
     F: Future + 'static,
 {

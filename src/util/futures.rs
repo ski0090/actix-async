@@ -8,7 +8,7 @@ pub(crate) use futures_core::Stream;
 
 use crate::util::channel::{oneshot, OneshotReceiver, OneshotSender};
 
-pub type LocalBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+pub type LocalBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 pub(crate) fn cancelable<Fut, FutCancel>(
     fut: Fut,

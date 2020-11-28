@@ -8,7 +8,7 @@ use crate::context::{Context, ContextWithActor};
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
 use crate::util::channel::{channel, Receiver};
-use crate::util::futures::LocalBoxedFuture;
+use crate::util::futures::LocalBoxFuture;
 
 pub(crate) const CHANNEL_CAP: usize = 256;
 
@@ -21,7 +21,7 @@ pub trait Actor: Sized + 'static {
     fn on_start<'act, 'ctx, 'res>(
         &'act mut self,
         ctx: &'ctx mut Context<Self>,
-    ) -> LocalBoxedFuture<'res, ()>
+    ) -> LocalBoxFuture<'res, ()>
     where
         'act: 'res,
         'ctx: 'res,
@@ -35,7 +35,7 @@ pub trait Actor: Sized + 'static {
     fn on_stop<'act, 'ctx, 'res>(
         &'act mut self,
         ctx: &'ctx mut Context<Self>,
-    ) -> LocalBoxedFuture<'res, ()>
+    ) -> LocalBoxFuture<'res, ()>
     where
         'act: 'res,
         'ctx: 'res,
@@ -162,9 +162,7 @@ pub trait Actor: Sized + 'static {
 
             let actor = f(&mut ctx).await;
 
-            let mut ctx = ContextWithActor::new(actor, ctx);
-
-            let _ = ctx.first_run().await;
+            ContextWithActor::new(actor, ctx).await;
         });
     }
 }

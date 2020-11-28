@@ -10,7 +10,7 @@ use crate::error::ActixAsyncError;
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
 use crate::util::channel::{OneshotReceiver, SendFuture};
-use crate::util::futures::LocalBoxedFuture;
+use crate::util::futures::LocalBoxFuture;
 
 /// default timeout for sending message
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,7 +21,7 @@ pub type MessageRequest<'a, A, R> =
 
 /// Box version of MessageRequest that bound to `Message::Result` type.
 pub type BoxedMessageRequest<'a, RT, R> =
-    _MessageRequest<RT, LocalBoxedFuture<'a, Result<(), ActixAsyncError>>, R>;
+    _MessageRequest<RT, LocalBoxFuture<'a, Result<(), ActixAsyncError>>, R>;
 
 pin_project! {
     #[project = MessageRequestProj]

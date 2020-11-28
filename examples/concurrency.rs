@@ -24,7 +24,7 @@ message!(Msg, ());
 
 #[async_trait::async_trait(?Send)]
 impl Handler<Msg> for MyActor {
-    // Use handle methods whenever you can. Handler::handle_wait would always be slower.
+    // Use handle method whenever you can. Handler::handle_wait would always be slower.
     async fn handle(&self, _: Msg, _: &Context<Self>) {
         // RefCell can safely mutate actor state as long as RefMut is not held across await point.
         let mut state = self.state_mut.borrow_mut();

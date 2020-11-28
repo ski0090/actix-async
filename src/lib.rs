@@ -51,7 +51,8 @@
 //! ```
 
 #![no_std]
-#![forbid(unused_imports, unused_variables, unused_mut)]
+#![forbid(unused_imports, unused_mut)]
+#![deny(unused_variables)]
 
 extern crate alloc;
 
@@ -65,8 +66,6 @@ pub mod address;
 pub mod context;
 pub mod error;
 pub mod prelude {
-    #[cfg(feature = "actix-rt")]
-    pub use crate::actor;
     pub use crate::actor::Actor;
     pub use crate::context::Context;
     pub use crate::context::ContextJoinHandle;
@@ -74,13 +73,15 @@ pub mod prelude {
     pub use crate::handler::Handler;
     pub use crate::message;
     pub use crate::message::Message;
-    #[cfg(feature = "actix-rt")]
-    pub use crate::runtime::default_rt::ActixRuntime;
     pub use crate::runtime::RuntimeService;
-    pub use crate::util::futures::LocalBoxedFuture;
+    pub use crate::util::futures::LocalBoxFuture;
+    #[cfg(feature = "actix-rt")]
+    pub use {crate::actor, crate::runtime::default_rt::ActixRuntime};
 }
 pub mod request;
 pub mod runtime;
+#[cfg(feature = "actix-rt")]
+pub mod supervisor;
 
 #[cfg(test)]
 mod test {

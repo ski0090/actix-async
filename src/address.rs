@@ -12,7 +12,7 @@ use crate::message::{
 use crate::request::{BoxedMessageRequest, MessageRequest, _MessageRequest};
 use crate::runtime::RuntimeService;
 use crate::util::channel::{oneshot, Receiver, Sender, WeakSender};
-use crate::util::futures::LocalBoxedFuture;
+use crate::util::futures::LocalBoxFuture;
 
 /// The message sink of `Actor` type. `Message` and boxed async blocks are sent to Actor through it.
 pub struct Addr<A>(Sender<ActorMessage<A>>);
@@ -61,7 +61,7 @@ impl<A: Actor> Addr<A> {
     #[inline]
     pub fn run<F, R>(&self, func: F) -> MessageRequest<A, R>
     where
-        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxedFuture<'a, R> + Send + 'static,
+        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, R> + Send + 'static,
         R: Send + 'static,
     {
         let msg = FunctionMessage::new(func);
@@ -74,9 +74,7 @@ impl<A: Actor> Addr<A> {
     #[inline]
     pub fn run_wait<F, R>(&self, func: F) -> MessageRequest<A, R>
     where
-        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxedFuture<'a, R>
-            + Send
-            + 'static,
+        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, R> + Send + 'static,
         R: Send + 'static,
     {
         let msg = FunctionMutMessage::new(func);
