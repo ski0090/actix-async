@@ -12,6 +12,10 @@ name = "benchmark"
 path = "./examples/benchmark.rs"
 
 [[example]]
+name = "concurrency"
+path = "./examples/concurrency.rs"
+
+[[example]]
 name = "closure"
 path = "./examples/closure.rs"
 

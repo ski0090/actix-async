@@ -99,8 +99,9 @@ impl<A: Actor> Context<A> {
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
     pub fn stop(&self) {
-        self.rx.close();
-        self.state.set(ActorState::StopGraceful);
+        if self.rx.close() {
+            self.state.set(ActorState::StopGraceful);
+        }
     }
 
     /// get the address of actor from context.
@@ -351,16 +352,6 @@ impl<A: Actor> Future for ContextWithActor<A> {
             }
         }
 
-        // could be no cache message at this point. can stop gracefully.
-        match this.ctx.state.get() {
-            ActorState::Running => {}
-            // still have unresolved futures.
-            ActorState::StopGraceful if !this.cache_ref.is_empty() || this.cache_mut.is_some() => {
-                return Poll::Pending;
-            }
-            ActorState::StopGraceful | ActorState::Stop => return Poll::Ready(()),
-        }
-
         // flag indicate if return pending or poll an extra round.
         let mut new = false;
 
@@ -428,7 +419,13 @@ impl<A: Actor> Future for ContextWithActor<A> {
                 }
                 Poll::Ready(None) => {
                     this.ctx.stop();
-                    return self.poll(cx);
+                    return if new {
+                        self.poll(cx)
+                    } else if !this.cache_ref.is_empty() || this.cache_mut.is_some() {
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(())
+                    };
                 }
                 // if we have new concurrent messages then run an extra poll.
                 Poll::Pending => return if new { self.poll(cx) } else { Poll::Pending },

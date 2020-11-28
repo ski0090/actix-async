@@ -1,8 +1,11 @@
+use core::future::Future;
+
 use alloc::boxed::Box;
 
 use crate::actor::Actor;
 use crate::context::Context;
 use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};
+use crate::util::channel::OneshotSender;
 use crate::util::futures::LocalBoxedFuture;
 
 /// Trait define how actor handle a message.
@@ -161,19 +164,9 @@ where
         let act: &'static A = unsafe { core::mem::transmute(act) };
         let ctx: &'static Context<A> = unsafe { core::mem::transmute(ctx) };
 
-        Box::pin(async move {
-            match tx {
-                Some(tx) => {
-                    if !tx.is_closed() {
-                        let res = act.handle(msg, ctx).await;
-                        let _ = tx.send(res);
-                    }
-                }
-                None => {
-                    let _ = act.handle(msg, ctx).await;
-                }
-            }
-        })
+        let fut = act.handle(msg, ctx);
+
+        handle(tx, fut)
     }
 
     fn handle_wait<'msg, 'act, 'ctx>(
@@ -196,18 +189,27 @@ where
         let act: &'static mut A = unsafe { core::mem::transmute(act) };
         let ctx: &'static mut Context<A> = unsafe { core::mem::transmute(ctx) };
 
-        Box::pin(async move {
-            match tx {
-                Some(tx) => {
-                    if !tx.is_closed() {
-                        let res = act.handle_wait(msg, ctx).await;
-                        let _ = tx.send(res);
-                    }
-                }
-                None => {
-                    let _ = act.handle_wait(msg, ctx).await;
+        let fut = act.handle_wait(msg, ctx);
+
+        handle(tx, fut)
+    }
+}
+
+fn handle<F>(tx: Option<OneshotSender<F::Output>>, fut: F) -> LocalBoxedFuture<'static, ()>
+where
+    F: Future + 'static,
+{
+    Box::pin(async move {
+        match tx {
+            Some(tx) => {
+                if !tx.is_closed() {
+                    let res = fut.await;
+                    let _ = tx.send(res);
                 }
             }
-        })
-    }
+            None => {
+                let _ = fut.await;
+            }
+        }
+    })
 }
