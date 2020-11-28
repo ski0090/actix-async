@@ -99,9 +99,8 @@ impl<A: Actor> Context<A> {
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
     pub fn stop(&self) {
-        if self.rx.close() {
-            self.state.set(ActorState::StopGraceful);
-        }
+        self.rx.close();
+        self.state.set(ActorState::StopGraceful);
     }
 
     /// get the address of actor from context.
@@ -253,6 +252,10 @@ impl<A: Actor> Context<A> {
     ) -> Result<(), ActixAsyncError> {
         Addr::from_recv(rx)?.deref().send(msg).await
     }
+
+    fn is_stopped(&self) -> bool {
+        self.state.get() != ActorState::Running
+    }
 }
 
 type Task = LocalBoxFuture<'static, ()>;
@@ -291,6 +294,10 @@ impl CacheRef {
 
     fn add_concurrent<A: Actor>(&mut self, mut msg: MessageObject<A>, act: &A, ctx: &Context<A>) {
         self.0.push(msg.handle(act, ctx));
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
     }
 }
 
@@ -355,6 +362,30 @@ impl<A: Actor> ContextWithActor<A> {
             on_start: None,
         }
     }
+
+    pub(crate) fn is_stopped(&self) -> bool {
+        match self {
+            ContextWithActor::Starting { ctx, .. } => {
+                ctx.as_ref().map(|ctx| ctx.is_stopped()).unwrap_or(true)
+            }
+            ContextWithActor::Running { ctx, .. } => {
+                ctx.as_ref().map(|ctx| ctx.is_stopped()).unwrap_or(true)
+            }
+            ContextWithActor::Stopping { ctx, .. } => ctx.is_stopped(),
+        }
+    }
+
+    pub(crate) fn clear_cache(&mut self) {
+        if let ContextWithActor::Running {
+            cache_ref,
+            cache_mut,
+            ..
+        } = self
+        {
+            cache_mut.clear();
+            cache_ref.clear();
+        }
+    }
 }
 
 impl<A: Actor> Future for ContextWithActor<A> {
@@ -365,6 +396,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
             ContextProj::Starting { act, ctx, on_start } => match on_start {
                 Some(ref mut fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(_) => {
+                        *on_start = None;
                         let mut ctx = ctx.take();
                         let act = act.take();
                         ctx.as_mut().unwrap().state.set(ActorState::Running);
@@ -547,8 +579,9 @@ impl<A: Actor> Future for ContextWithActor<A> {
                 on_stop,
                 drop_notify,
             } => match on_stop {
-                Some(ref mut on_stop) => match on_stop.as_mut().poll(cx) {
+                Some(ref mut fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(_) => {
+                        *on_stop = None;
                         if let Some(tx) = drop_notify.take() {
                             let _ = tx.send(());
                         }

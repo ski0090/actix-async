@@ -167,7 +167,7 @@ pub trait Actor: Sized + 'static {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum ActorState {
     Running,
     Stop,

@@ -1,4 +1,6 @@
 use core::future::{ready, Future};
+use core::pin::Pin;
+use core::task::{Context as StdContext, Poll};
 
 use alloc::vec::Vec;
 
@@ -6,7 +8,7 @@ use actix_rt::Arbiter;
 
 use crate::actor::{Actor, CHANNEL_CAP};
 use crate::address::Addr;
-use crate::context::Context;
+use crate::context::{Context, ContextWithActor};
 use crate::util::channel::channel;
 
 /// Supervisor can start multiple instance of same actor on multiple `actix_rt::Arbiter`.
@@ -38,6 +40,7 @@ impl Supervisor {
     /// use std::sync::Arc;
     /// use std::sync::atomic::{AtomicUsize, Ordering};
     /// use std::thread::ThreadId;
+    /// use std::time::Duration;
     ///
     /// use actix_async::prelude::*;
     /// use actix_async::supervisor::Supervisor;
@@ -52,6 +55,11 @@ impl Supervisor {
     /// #[async_trait::async_trait(?Send)]
     /// impl Handler<Msg> for TestActor {
     ///     async fn handle(&self, _: Msg, _: &Context<Self>) -> ThreadId {
+    ///         unimplemented!()
+    ///     }
+    ///
+    ///     async fn handle_wait(&mut self, _: Msg, _: &mut Context<Self>) -> ThreadId {
+    ///         actix_rt::time::sleep(Duration::from_millis(1)).await;
     ///         // return the current thread id of actor.
     ///         std::thread::current().id()
     ///     }
@@ -68,7 +76,7 @@ impl Supervisor {
     ///     // construct multiple futures to TestActor's handler
     ///     let mut fut = FuturesUnordered::new();
     ///     for _ in 0..1000 {
-    ///         fut.push(addr.send(Msg));
+    ///         fut.push(addr.wait(Msg));
     ///     }
     ///     
     ///     // collect the result and retain unique thread id.
@@ -85,7 +93,7 @@ impl Supervisor {
     ///         })
     ///         .len();
     ///
-    ///     // we should have at least 2-4 thread id here.
+    ///     // we should have at least 2-4 unique thread id here.
     ///     assert!(len > 1);
     /// }
     /// ```
@@ -109,11 +117,60 @@ impl Supervisor {
             let off = self.next % self.arb.len();
 
             self.arb[off].exec_fn(move || {
-                A::_start(rx, f);
+                A::spawn(async move {
+                    let mut ctx = Context::new(rx);
+
+                    let actor = f(&mut ctx).await;
+
+                    SupervisorFut {
+                        fut: Some(ContextWithActor::new(actor, ctx)),
+                    }
+                    .await;
+                });
             });
             self.next += 1;
         });
 
         Addr::new(tx)
+    }
+}
+
+struct SupervisorFut<A: Actor> {
+    fut: Option<ContextWithActor<A>>,
+}
+
+impl<A: Actor> Default for SupervisorFut<A> {
+    fn default() -> Self {
+        Self { fut: None }
+    }
+}
+
+impl<A: Actor> Drop for SupervisorFut<A> {
+    fn drop(&mut self) {
+        if !self.fut.as_ref().unwrap().is_stopped() {
+            let mut fut = core::mem::take(self);
+
+            // TODO: catch panic on task level and not clear all.
+            fut.fut.as_mut().unwrap().clear_cache();
+
+            A::spawn(fut);
+        }
+    }
+}
+
+impl<A: Actor> Future for SupervisorFut<A> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
+        match Pin::new(self.fut.as_mut().unwrap()).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(()) => {
+                if self.fut.as_ref().unwrap().is_stopped() {
+                    Poll::Ready(())
+                } else {
+                    self.poll(cx)
+                }
+            }
+        }
     }
 }
