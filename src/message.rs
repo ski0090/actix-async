@@ -1,11 +1,17 @@
+use core::future::Future;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
+use core::pin::Pin;
+use core::task::{Context as StdContext, Poll};
+use core::time::Duration;
 
 use alloc::boxed::Box;
 
 use crate::actor::{Actor, ActorState};
 use crate::handler::{Handler, MessageHandler};
-use crate::util::channel::OneshotSender;
+use crate::runtime::RuntimeService;
+use crate::util::channel::{OneshotReceiver, OneshotSender};
+use crate::util::futures::Stream;
 use crate::util::smart_pointer::RefCounter;
 
 pub trait Message: 'static {
@@ -82,11 +88,20 @@ where
     type Result = R;
 }
 
-pub(crate) enum DelayMessage<A> {
-    DelayRef(MessageObject<A>),
-    DelayMut(MessageObject<A>),
-    IntervalRef(Box<dyn MessageObjectClone<A>>),
-    IntervalMut(Box<dyn MessageObjectClone<A>>),
+// intern type for cloning a MessageObject.
+pub(crate) enum ActorMessageClone<A> {
+    Ref(Box<dyn MessageObjectClone<A>>),
+    Mut(Box<dyn MessageObjectClone<A>>),
+}
+
+// the clone would return ActorMessage directly.
+impl<A: Actor> ActorMessageClone<A> {
+    pub(crate) fn clone(&self) -> ActorMessage<A> {
+        match self {
+            Self::Ref(ref obj) => ActorMessage::Ref(obj.clone_object()),
+            Self::Mut(ref obj) => ActorMessage::Mut(obj.clone_object()),
+        }
+    }
 }
 
 pub(crate) trait MessageObjectClone<A> {
@@ -103,6 +118,7 @@ where
     }
 }
 
+// main type wrapper for all types of message goes to actor.
 pub struct MessageObject<A>(Box<dyn MessageHandler<A>>);
 
 /*
@@ -142,15 +158,101 @@ impl<A> DerefMut for MessageObject<A> {
     }
 }
 
+// concrete type for dyn MessageHandler trait object that provide the message and the response
+// channel.
 pub(crate) struct MessageHandlerContainer<M: Message> {
     pub(crate) msg: Option<M>,
     pub(crate) tx: Option<OneshotSender<M::Result>>,
 }
 
+// main type of message goes through actor's channel.
 pub enum ActorMessage<A> {
     Ref(MessageObject<A>),
     Mut(MessageObject<A>),
     ActorState(ActorState, Option<OneshotSender<()>>),
-    DelayToken(usize),
-    DelayTokenCancel(usize),
+}
+
+// delay message passed to Context<Actor>.
+pub(crate) struct DelayMessage<A: Actor> {
+    delay: <A::Runtime as RuntimeService>::Sleep,
+    handle: Option<OneshotReceiver<()>>,
+    msg: Option<ActorMessage<A>>,
+}
+
+impl<A: Actor> DelayMessage<A> {
+    pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessage<A>) -> Self {
+        Self {
+            delay: A::sleep(dur),
+            handle: Some(rx),
+            msg: Some(msg),
+        }
+    }
+}
+
+impl<A: Actor> Future for DelayMessage<A> {
+    type Output = Option<ActorMessage<A>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if let Some(h) = this.handle.as_mut() {
+            match Pin::new(h).poll(cx) {
+                // handle canceled. resolve with nothing.
+                Poll::Ready(Ok(())) => return Poll::Ready(None),
+                // handle dropped. the task is now detached.
+                Poll::Ready(Err(_)) => this.handle = None,
+                Poll::Pending => {}
+            }
+        }
+
+        match Pin::new(&mut this.delay).poll(cx) {
+            Poll::Ready(_) => Poll::Ready(Some(this.msg.take().unwrap())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+// interval message passed to Context<Actor>.
+pub(crate) struct IntervalMessage<A: Actor> {
+    dur: Duration,
+    delay: <A::Runtime as RuntimeService>::Sleep,
+    handle: Option<OneshotReceiver<()>>,
+    msg: ActorMessageClone<A>,
+}
+
+impl<A: Actor> IntervalMessage<A> {
+    pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessageClone<A>) -> Self {
+        Self {
+            dur,
+            delay: A::sleep(dur),
+            handle: Some(rx),
+            msg,
+        }
+    }
+}
+
+impl<A: Actor> Stream for IntervalMessage<A> {
+    type Item = ActorMessage<A>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(h) = this.handle.as_mut() {
+            match Pin::new(h).poll(cx) {
+                // handle canceled. resolve with nothing.
+                Poll::Ready(Ok(())) => return Poll::Ready(None),
+                // handle dropped. the task is now detached.
+                Poll::Ready(Err(_)) => this.handle = None,
+                Poll::Pending => {}
+            }
+        }
+
+        match Pin::new(&mut this.delay).poll(cx) {
+            Poll::Ready(_) => {
+                this.delay = A::sleep(this.dur);
+                cx.waker().wake_by_ref();
+                Poll::Ready(Some(this.msg.clone()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
