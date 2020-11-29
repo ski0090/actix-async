@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 
 use crate::actor::Actor;
 use crate::context::Context;
-use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageHandlerContainer};
+use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageContainer};
 use crate::util::channel::OneshotSender;
 use crate::util::futures::LocalBoxFuture;
 
@@ -136,10 +136,12 @@ pub trait MessageHandler<A: Actor> {
         &'msg mut self,
         act: &'act mut A,
         ctx: &'ctx mut Context<A>,
-    ) -> LocalBoxFuture<'static, ()>;
+    ) -> LocalBoxFuture<'static, ()> {
+        self.handle(act, ctx)
+    }
 }
 
-impl<A, M> MessageHandler<A> for MessageHandlerContainer<M>
+impl<A, M> MessageHandler<A> for MessageContainer<M>
 where
     A: Actor + Handler<M>,
     M: Message,
@@ -149,8 +151,7 @@ where
         act: &'act A,
         ctx: &'ctx Context<A>,
     ) -> LocalBoxFuture<'static, ()> {
-        let msg = self.msg.take().unwrap();
-        let tx = self.tx.take();
+        let (msg, tx) = self.take();
 
         /*
             SAFETY:
@@ -161,6 +162,7 @@ where
             futures transmuted to static lifetime in ContextWithActor.cache_ref must resolved
             before next ContextWithActor.cache_mut get polled
         */
+
         let act: &'static A = unsafe { core::mem::transmute(act) };
         let ctx: &'static Context<A> = unsafe { core::mem::transmute(ctx) };
 
@@ -174,8 +176,7 @@ where
         act: &'act mut A,
         ctx: &'ctx mut Context<A>,
     ) -> LocalBoxFuture<'static, ()> {
-        let msg = self.msg.take().unwrap();
-        let tx = self.tx.take();
+        let (msg, tx) = self.take();
 
         /*
             SAFETY:
@@ -186,6 +187,7 @@ where
             future transmute to static lifetime must be polled only when ContextWithActor.cache_ref
             is empty.
         */
+
         let act: &'static mut A = unsafe { core::mem::transmute(act) };
         let ctx: &'static mut Context<A> = unsafe { core::mem::transmute(ctx) };
 

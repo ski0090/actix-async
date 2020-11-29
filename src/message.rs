@@ -88,6 +88,59 @@ where
     type Result = R;
 }
 
+// concrete type for dyn MessageHandler trait object that provide the message and the response
+// channel.
+pub(crate) struct MessageContainer<M: Message> {
+    pub(crate) msg: Option<M>,
+    pub(crate) tx: Option<OneshotSender<M::Result>>,
+}
+
+impl<M: Message> MessageContainer<M> {
+    pub(crate) fn take(&mut self) -> (M, Option<OneshotSender<M::Result>>) {
+        (self.msg.take().unwrap(), self.tx.take())
+    }
+}
+
+// main type wrapper for all types of message goes to actor.
+pub struct MessageObject<A>(Box<dyn MessageHandler<A>>);
+
+/*
+    SAFETY:
+    Message object is construct from either `Context` or `Addr`.
+
+    *. When it's constructed through `Addr`. The caller must make sure the `Message` type passed to
+       `MessageObject::new` is `Send` bound as the object would possibly sent to another thread.
+    *. When it's constructed through `Context`. The object remain on it's thread and never move to
+       other threads so it's safe to bound to `Send` regardless.
+*/
+unsafe impl<A> Send for MessageObject<A> {}
+
+pub(crate) fn message_send_check<M: Message + Send>() {}
+
+impl<A> MessageObject<A> {
+    pub(crate) fn new<M>(msg: M, tx: Option<OneshotSender<M::Result>>) -> MessageObject<A>
+    where
+        A: Actor + Handler<M>,
+        M: Message,
+    {
+        MessageObject(Box::new(MessageContainer { msg: Some(msg), tx }))
+    }
+}
+
+impl<A> Deref for MessageObject<A> {
+    type Target = dyn MessageHandler<A>;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl<A> DerefMut for MessageObject<A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
+}
+
 // intern type for cloning a MessageObject.
 pub(crate) enum ActorMessageClone<A> {
     Ref(Box<dyn MessageObjectClone<A>>),
@@ -118,68 +171,14 @@ where
     }
 }
 
-// main type wrapper for all types of message goes to actor.
-pub struct MessageObject<A>(Box<dyn MessageHandler<A>>);
-
-/*
-    SAFETY:
-    Message object is construct from either `Context` or `Addr`.
-
-    *. When it's constructed through `Addr`. The caller must make sure the `Message` type passed to
-       `MessageObject::new` is `Send` bound as the object would possibly sent to another thread.
-    *. When it's constructed through `Context`. The object remain on it's thread and never move to
-       other threads so it's safe to bound to `Send` regardless.
-*/
-unsafe impl<A> Send for MessageObject<A> {}
-
-pub(crate) fn message_send_check<M: Message + Send>() {}
-
-impl<A> MessageObject<A> {
-    pub(crate) fn new<M>(msg: M, tx: Option<OneshotSender<M::Result>>) -> MessageObject<A>
-    where
-        A: Actor + Handler<M>,
-        M: Message,
-    {
-        MessageObject(Box::new(MessageHandlerContainer { msg: Some(msg), tx }))
-    }
-}
-
-impl<A> Deref for MessageObject<A> {
-    type Target = dyn MessageHandler<A>;
-
-    fn deref(&self) -> &Self::Target {
-        &*self.0
-    }
-}
-
-impl<A> DerefMut for MessageObject<A> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.0
-    }
-}
-
-// concrete type for dyn MessageHandler trait object that provide the message and the response
-// channel.
-pub(crate) struct MessageHandlerContainer<M: Message> {
-    pub(crate) msg: Option<M>,
-    pub(crate) tx: Option<OneshotSender<M::Result>>,
-}
-
-// main type of message goes through actor's channel.
-pub enum ActorMessage<A> {
-    Ref(MessageObject<A>),
-    Mut(MessageObject<A>),
-    ActorState(ActorState, Option<OneshotSender<()>>),
-}
-
-// delay message passed to Context<Actor>.
-pub(crate) struct DelayMessage<A: Actor> {
+// message would produced in the future passed to Context<Actor>.
+pub(crate) struct FutureMessage<A: Actor> {
     delay: <A::Runtime as RuntimeService>::Sleep,
     handle: Option<OneshotReceiver<()>>,
     msg: Option<ActorMessage<A>>,
 }
 
-impl<A: Actor> DelayMessage<A> {
+impl<A: Actor> FutureMessage<A> {
     pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessage<A>) -> Self {
         Self {
             delay: A::sleep(dur),
@@ -189,7 +188,7 @@ impl<A: Actor> DelayMessage<A> {
     }
 }
 
-impl<A: Actor> Future for DelayMessage<A> {
+impl<A: Actor> Future for FutureMessage<A> {
     type Output = Option<ActorMessage<A>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
@@ -256,4 +255,95 @@ impl<A: Actor> Stream for IntervalMessage<A> {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+pub(crate) enum StreamMessage<A: Actor> {
+    Interval(IntervalMessage<A>),
+    Boxed(Pin<Box<dyn Stream<Item = ActorMessage<A>>>>),
+}
+
+impl<A: Actor> StreamMessage<A> {
+    pub(crate) fn new_interval(msg: IntervalMessage<A>) -> Self {
+        Self::Interval(msg)
+    }
+
+    pub(crate) fn new_boxed<S>(stream: S) -> Self
+    where
+        S: Stream<Item = ActorMessage<A>> + 'static,
+    {
+        Self::Boxed(Box::pin(stream))
+    }
+}
+
+impl<A: Actor> Stream for StreamMessage<A> {
+    type Item = ActorMessage<A>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Option<Self::Item>> {
+        match self.get_mut() {
+            StreamMessage::Interval(stream) => Pin::new(stream).poll_next(cx),
+            StreamMessage::Boxed(stream) => stream.as_mut().poll_next(cx),
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub(crate) struct StreamContainer<A, S, F> {
+        #[pin]
+        stream: S,
+        handle: Option<OneshotReceiver<()>>,
+        _act: PhantomData<A>,
+        f: F
+    }
+}
+
+impl<A, S, F> StreamContainer<A, S, F> {
+    pub(crate) fn new(stream: S, handle: OneshotReceiver<()>, f: F) -> Self {
+        Self {
+            stream,
+            handle: Some(handle),
+            _act: PhantomData,
+            f,
+        }
+    }
+}
+
+impl<A, S, F> Stream for StreamContainer<A, S, F>
+where
+    A: Actor + Handler<S::Item>,
+    S: Stream,
+    S::Item: Message,
+    F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy,
+{
+    type Item = ActorMessage<A>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+
+        if let Some(h) = this.handle.as_mut() {
+            match Pin::new(h).poll(cx) {
+                // handle canceled. resolve with nothing.
+                Poll::Ready(Ok(())) => return Poll::Ready(None),
+                // handle dropped. the task is now detached.
+                Poll::Ready(Err(_)) => *this.handle = None,
+                Poll::Pending => {}
+            }
+        }
+
+        match this.stream.poll_next(cx) {
+            Poll::Ready(Some(item)) => {
+                let msg = MessageObject::new(item, None);
+                let msg = (this.f)(msg);
+                Poll::Ready(Some(msg))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+// main type of message goes through actor's channel.
+pub enum ActorMessage<A> {
+    Ref(MessageObject<A>),
+    Mut(MessageObject<A>),
+    ActorState(ActorState, Option<OneshotSender<()>>),
 }

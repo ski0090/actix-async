@@ -1,6 +1,5 @@
 use core::cell::{Cell, RefCell};
 use core::future::Future;
-use core::ops::Deref;
 use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
@@ -10,14 +9,13 @@ use alloc::vec::Vec;
 
 use crate::actor::{Actor, ActorState, CHANNEL_CAP};
 use crate::address::Addr;
-use crate::error::ActixAsyncError;
 use crate::handler::Handler;
 use crate::message::{
-    ActorMessage, ActorMessageClone, DelayMessage, FunctionMessage, FunctionMutMessage,
-    IntervalMessage, Message, MessageObject,
+    ActorMessage, ActorMessageClone, FunctionMessage, FunctionMutMessage, FutureMessage,
+    IntervalMessage, Message, MessageObject, StreamContainer, StreamMessage,
 };
-use crate::util::channel::{oneshot, OneshotSender, Receiver};
-use crate::util::futures::{cancelable, next, LocalBoxFuture, Stream};
+use crate::util::channel::{oneshot, OneshotReceiver, OneshotSender, Receiver};
+use crate::util::futures::{LocalBoxFuture, Stream};
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -25,8 +23,8 @@ use crate::util::futures::{cancelable, next, LocalBoxFuture, Stream};
 /// Used to mutate the state of actor and add additional tasks to actor.
 pub struct Context<A: Actor> {
     state: Cell<ActorState>,
-    delay_message: RefCell<Vec<DelayMessage<A>>>,
-    interval_message: RefCell<Vec<IntervalMessage<A>>>,
+    future_message: RefCell<Vec<FutureMessage<A>>>,
+    stream_message: RefCell<Vec<StreamMessage<A>>>,
     rx: Receiver<ActorMessage<A>>,
 }
 
@@ -55,8 +53,8 @@ impl<A: Actor> Context<A> {
     pub(crate) fn new(rx: Receiver<ActorMessage<A>>) -> Self {
         Context {
             state: Cell::new(ActorState::Stop),
-            delay_message: RefCell::new(Vec::with_capacity(8)),
-            interval_message: RefCell::new(Vec::with_capacity(8)),
+            future_message: RefCell::new(Vec::with_capacity(8)),
+            stream_message: RefCell::new(Vec::with_capacity(8)),
             rx,
         }
     }
@@ -66,14 +64,10 @@ impl<A: Actor> Context<A> {
     where
         F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, ()> + Clone + 'static,
     {
-        let (handle, rx) = oneshot();
-
-        let msg = FunctionMessage::new(f);
-        let msg = IntervalMessage::new(dur, rx, ActorMessageClone::Ref(Box::new(msg)));
-
-        self.interval_message.borrow_mut().push(msg);
-
-        ContextJoinHandle { handle }
+        self.interval(|rx| {
+            let msg = FunctionMessage::new(f);
+            IntervalMessage::new(dur, rx, ActorMessageClone::Ref(Box::new(msg)))
+        })
     }
 
     /// run interval exclusive closure on context. `Handler::handle_wait` will be called.
@@ -84,12 +78,22 @@ impl<A: Actor> Context<A> {
             + Clone
             + 'static,
     {
+        self.interval(|rx| {
+            let msg = FunctionMutMessage::new(f);
+            IntervalMessage::new(dur, rx, ActorMessageClone::Mut(Box::new(msg)))
+        })
+    }
+
+    fn interval<F>(&self, f: F) -> ContextJoinHandle
+    where
+        F: FnOnce(OneshotReceiver<()>) -> IntervalMessage<A>,
+    {
         let (handle, rx) = oneshot();
 
-        let msg = FunctionMutMessage::new(f);
-        let msg = IntervalMessage::new(dur, rx, ActorMessageClone::Mut(Box::new(msg)));
+        let msg = f(rx);
+        let msg = StreamMessage::new_interval(msg);
 
-        self.interval_message.borrow_mut().push(msg);
+        self.stream_message.borrow_mut().push(msg);
 
         ContextJoinHandle { handle }
     }
@@ -99,15 +103,11 @@ impl<A: Actor> Context<A> {
     where
         F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, ()> + 'static,
     {
-        let (handle, rx) = oneshot();
-
-        let msg = FunctionMessage::new(f);
-        let msg = MessageObject::new(msg, None);
-        let msg = DelayMessage::new(dur, rx, ActorMessage::Ref(msg));
-
-        self.delay_message.borrow_mut().push(msg);
-
-        ContextJoinHandle { handle }
+        self.later(|rx| {
+            let msg = FunctionMessage::new(f);
+            let msg = MessageObject::new(msg, None);
+            FutureMessage::new(dur, rx, ActorMessage::Ref(msg))
+        })
     }
 
     /// run exclusive closure on context after given duration. `Handler::handle_wait` will be
@@ -117,14 +117,20 @@ impl<A: Actor> Context<A> {
     where
         F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, ()> + 'static,
     {
+        self.later(|rx| {
+            let msg = FunctionMutMessage::new(f);
+            let msg = MessageObject::new(msg, None);
+            FutureMessage::new(dur, rx, ActorMessage::Mut(msg))
+        })
+    }
+
+    fn later<F>(&self, f: F) -> ContextJoinHandle
+    where
+        F: FnOnce(OneshotReceiver<()>) -> FutureMessage<A>,
+    {
         let (handle, rx) = oneshot();
 
-        let msg = FunctionMutMessage::new(f);
-        let msg = MessageObject::new(msg, None);
-        let msg = DelayMessage::new(dur, rx, ActorMessage::Mut(msg));
-
-        self.delay_message.borrow_mut().push(msg);
-
+        self.future_message.borrow_mut().push(f(rx));
         ContextJoinHandle { handle }
     }
 
@@ -203,35 +209,11 @@ impl<A: Actor> Context<A> {
         A: Handler<S::Item>,
         F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy + 'static,
     {
-        let rx = self.rx.clone();
-
-        let fut = async move {
-            let mut stream = stream;
-            // SAFETY:
-            // stream is owned by async task and never moved. The loop would borrow pinned stream
-            // with `Next`.
-            let mut stream = unsafe { Pin::new_unchecked(&mut stream) };
-            while let Some(msg) = next(&mut stream).await {
-                let msg = MessageObject::new(msg, None);
-                let msg = f(msg);
-                if Self::send_with_rx(&rx, msg).await.is_err() {
-                    return;
-                }
-            }
-        };
-
-        let (fut, handle) = cancelable(fut, async {});
-
-        A::spawn(fut);
-
+        let (handle, rx) = oneshot();
+        let stream = StreamContainer::new(stream, rx, f);
+        let msg = StreamMessage::new_boxed(stream);
+        self.stream_message.borrow_mut().push(msg);
         ContextJoinHandle { handle }
-    }
-
-    async fn send_with_rx(
-        rx: &Receiver<ActorMessage<A>>,
-        msg: ActorMessage<A>,
-    ) -> Result<(), ActixAsyncError> {
-        Addr::from_recv(rx)?.deref().send(msg).await
     }
 
     fn is_running(&self) -> bool {
@@ -321,8 +303,8 @@ pin_project_lite::pin_project! {
             ctx: Option<Context<A>>,
             cache_mut: CacheMut,
             cache_ref: CacheRef,
-            delay_cache: Vec<DelayMessage<A>>,
-            interval_cache: Vec<IntervalMessage<A>>,
+            future_cache: Vec<FutureMessage<A>>,
+            stream_cache: Vec<StreamMessage<A>>,
             drop_notify: Option<OneshotSender<()>>,
         },
         Stopping {
@@ -349,8 +331,8 @@ impl<A: Actor> ContextWithActor<A> {
             ctx,
             cache_ref: CacheRef::new(),
             cache_mut: CacheMut::new(),
-            delay_cache: Vec::with_capacity(8),
-            interval_cache: Vec::with_capacity(8),
+            future_cache: Vec::with_capacity(8),
+            stream_cache: Vec::with_capacity(8),
             drop_notify: None,
         }
     }
@@ -380,13 +362,13 @@ impl<A: Actor> ContextWithActor<A> {
         if let ContextWithActor::Running {
             cache_ref,
             cache_mut,
-            interval_cache,
+            stream_cache,
             ..
         } = self
         {
             cache_mut.clear();
             cache_ref.clear();
-            interval_cache.clear();
+            stream_cache.clear();
         }
     }
 }
@@ -427,8 +409,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
             ContextProj::Running {
                 cache_ref,
                 cache_mut,
-                delay_cache,
-                interval_cache,
+                future_cache,
+                stream_cache,
                 act,
                 ctx,
                 drop_notify,
@@ -456,21 +438,21 @@ impl<A: Actor> Future for ContextWithActor<A> {
                 if ctx.as_ref().unwrap().is_running() {
                     {
                         let ctx = ctx.as_mut().unwrap();
-                        delay_cache.merge(ctx);
-                        interval_cache.merge(ctx);
+                        future_cache.merge(ctx);
+                        stream_cache.merge(ctx);
                     }
 
                     // poll delay messages
                     let mut i = 0;
-                    while i < delay_cache.len() {
-                        match Pin::new(&mut delay_cache[i]).poll(cx) {
+                    while i < future_cache.len() {
+                        match Pin::new(&mut future_cache[i]).poll(cx) {
                             Poll::Ready(msg) => {
                                 // SAFETY:
                                 // Vec::swap_remove with no len check and drop of removed element in
                                 // place.
                                 // i is guaranteed to be smaller than delay_cache.len()
                                 unsafe {
-                                    delay_cache.swap_remove_uncheck(i);
+                                    future_cache.swap_remove_uncheck(i);
                                 }
 
                                 // msg.is_none() means it's canceled by ContextJoinHandle.
@@ -502,8 +484,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
 
                     // poll interval message.
                     let mut i = 0;
-                    while i < interval_cache.len() {
-                        match Pin::new(&mut interval_cache[i]).poll_next(cx) {
+                    while i < stream_cache.len() {
+                        match Pin::new(&mut stream_cache[i]).poll_next(cx) {
                             Poll::Ready(Some(msg)) => match msg {
                                 ActorMessage::Ref(msg) => {
                                     new = true;
@@ -530,7 +512,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                 // place.
                                 // i is guaranteed to be smaller than interval_cache.len()
                                 unsafe {
-                                    interval_cache.swap_remove_uncheck(i);
+                                    stream_cache.swap_remove_uncheck(i);
                                 }
                             }
                             Poll::Pending => i += 1,
@@ -643,18 +625,18 @@ trait MergeContext<A: Actor> {
     fn merge(&mut self, ctx: &mut Context<A>);
 }
 
-impl<A: Actor> MergeContext<A> for Vec<IntervalMessage<A>> {
+impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
     fn merge(&mut self, ctx: &mut Context<A>) {
-        let delay = ctx.interval_message.get_mut();
+        let delay = ctx.stream_message.get_mut();
         while let Some(delay) = delay.pop() {
             self.push(delay);
         }
     }
 }
 
-impl<A: Actor> MergeContext<A> for Vec<DelayMessage<A>> {
+impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
     fn merge(&mut self, ctx: &mut Context<A>) {
-        let delay = ctx.delay_message.get_mut();
+        let delay = ctx.future_message.get_mut();
         while let Some(delay) = delay.pop() {
             self.push(delay);
         }
