@@ -33,12 +33,12 @@ impl Handler<Msg> for BlockingActor {
         // use sleep to simulate heavy blocking computation.
         std::thread::sleep(Duration::from_millis(1));
 
-        // sadly the code below would have no chance to run.
+        // sadly the code below would have no chance to run correctly.
         // due to long time of blocking of thread.
         let now = Instant::now();
         ctx.run_later(Duration::from_millis(1), move |_, _| {
             Box::pin(async move {
-                println!("delayed task took {:?} to run", now.elapsed());
+                println!("delayed task took {:?} to run", now.elapsed(),);
             })
         });
     }
@@ -53,7 +53,7 @@ async fn main() {
     // start 2 instance of BlockingActor in supervisor.
     let addr = supervisor.start_in_arbiter(2, |_| BlockingActor);
 
-    // send 800 messages concurrently.
+    // send 200 messages concurrently.
     let mut fut = FuturesUnordered::new();
     for _ in 0..200 {
         fut.push(addr.wait(Msg));

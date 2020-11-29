@@ -37,9 +37,17 @@ pub struct ContextJoinHandle {
 }
 
 impl ContextJoinHandle {
-    /// cancel the task added to context associate to this handle. would consume self.
+    /// Cancel the task associate to this handle.
     pub fn cancel(self) {
         let _ = self.handle.send(());
+    }
+
+    /// Check if the task associate with this handle is terminated.
+    ///
+    /// This happens when the task is finished or the thread task runs on is recovered from a
+    /// panic.
+    pub fn is_terminated(&self) -> bool {
+        self.handle.is_closed()
     }
 }
 
@@ -122,6 +130,9 @@ impl<A: Actor> Context<A> {
 
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
+    ///
+    /// *. In the case of using `Supervisor`. This method would stop all actor instances at the
+    /// same time
     pub fn stop(&self) {
         self.rx.close();
         self.state.set(ActorState::StopGraceful);
@@ -136,6 +147,10 @@ impl<A: Actor> Context<A> {
     ///
     /// stream item will be treated as concurrent message and `Handler::handle` will be called.
     /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
+    ///
+    /// *. Stream would force closed when the actor is stopped. Either by dropping all `Addr` or
+    /// calling `Addr::stop`
+    ///
     /// # example:
     /// ```rust
     /// use actix_async::prelude::*;
@@ -219,8 +234,8 @@ impl<A: Actor> Context<A> {
         Addr::from_recv(rx)?.deref().send(msg).await
     }
 
-    fn is_stopped(&self) -> bool {
-        self.state.get() != ActorState::Running
+    fn is_running(&self) -> bool {
+        self.state.get() == ActorState::Running
     }
 }
 
@@ -320,7 +335,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<A: Actor> ContextWithActor<A> {
-    pub(crate) fn new(act: A, ctx: Context<A>) -> Self {
+    pub(crate) fn new_starting(act: A, ctx: Context<A>) -> Self {
         Self::Starting {
             ctx: Some(ctx),
             act: Some(act),
@@ -328,15 +343,36 @@ impl<A: Actor> ContextWithActor<A> {
         }
     }
 
-    pub(crate) fn is_stopped(&self) -> bool {
+    fn new_running(act: Option<A>, ctx: Option<Context<A>>) -> Self {
+        Self::Running {
+            act,
+            ctx,
+            cache_ref: CacheRef::new(),
+            cache_mut: CacheMut::new(),
+            delay_cache: Vec::with_capacity(8),
+            interval_cache: Vec::with_capacity(8),
+            drop_notify: None,
+        }
+    }
+
+    fn new_stopping(act: A, ctx: Context<A>, drop_notify: Option<OneshotSender<()>>) -> Self {
+        Self::Stopping {
+            act,
+            ctx,
+            on_stop: None,
+            drop_notify,
+        }
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
         match self {
             ContextWithActor::Starting { ctx, .. } => {
-                ctx.as_ref().map(|ctx| ctx.is_stopped()).unwrap_or(true)
+                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
             }
             ContextWithActor::Running { ctx, .. } => {
-                ctx.as_ref().map(|ctx| ctx.is_stopped()).unwrap_or(true)
+                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
             }
-            ContextWithActor::Stopping { ctx, .. } => ctx.is_stopped(),
+            ContextWithActor::Stopping { ctx, .. } => ctx.is_running(),
         }
     }
 
@@ -361,22 +397,14 @@ impl<A: Actor> Future for ContextWithActor<A> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         match self.as_mut().project() {
             ContextProj::Starting { act, ctx, on_start } => match on_start {
-                Some(ref mut fut) => match fut.as_mut().poll(cx) {
+                Some(fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(_) => {
                         *on_start = None;
                         let mut ctx = ctx.take();
                         let act = act.take();
                         ctx.as_mut().unwrap().state.set(ActorState::Running);
 
-                        self.as_mut().set(ContextWithActor::Running {
-                            act,
-                            ctx,
-                            cache_ref: CacheRef::new(),
-                            cache_mut: CacheMut::new(),
-                            delay_cache: Vec::with_capacity(8),
-                            interval_cache: Vec::with_capacity(8),
-                            drop_notify: None,
-                        });
+                        self.as_mut().set(ContextWithActor::new_running(act, ctx));
                         self.poll(cx)
                     }
                     Poll::Pending => Poll::Pending,
@@ -421,89 +449,92 @@ impl<A: Actor> Future for ContextWithActor<A> {
                     }
                 }
 
-                {
-                    let ctx = ctx.as_mut().unwrap();
-                    delay_cache.merge(ctx);
-                    interval_cache.merge(ctx);
-                }
-
                 // flag indicate if return pending or poll an extra round.
                 let mut new = false;
 
-                // poll delay messages
-                let mut i = 0;
-                while i < delay_cache.len() {
-                    match Pin::new(&mut delay_cache[i]).poll(cx) {
-                        Poll::Ready(msg) => {
-                            // SAFETY:
-                            // Vec::swap_remove with no len check and drop of removed element in
-                            // place.
-                            // i is guaranteed to be smaller than delay_cache.len()
-                            unsafe {
-                                delay_cache.swap_remove_uncheck(i);
-                            }
+                // If context is stopped we stop dealing with delay and interval messages.
+                if ctx.as_ref().unwrap().is_running() {
+                    {
+                        let ctx = ctx.as_mut().unwrap();
+                        delay_cache.merge(ctx);
+                        interval_cache.merge(ctx);
+                    }
 
-                            // msg.is_none() means it's canceled by ContextJoinHandle.
-                            if let Some(msg) = msg {
-                                match msg {
-                                    ActorMessage::Ref(msg) => {
-                                        new = true;
-                                        cache_ref.add_concurrent(
-                                            msg,
-                                            act.as_ref().unwrap(),
-                                            ctx.as_ref().unwrap(),
-                                        );
+                    // poll delay messages
+                    let mut i = 0;
+                    while i < delay_cache.len() {
+                        match Pin::new(&mut delay_cache[i]).poll(cx) {
+                            Poll::Ready(msg) => {
+                                // SAFETY:
+                                // Vec::swap_remove with no len check and drop of removed element in
+                                // place.
+                                // i is guaranteed to be smaller than delay_cache.len()
+                                unsafe {
+                                    delay_cache.swap_remove_uncheck(i);
+                                }
+
+                                // msg.is_none() means it's canceled by ContextJoinHandle.
+                                if let Some(msg) = msg {
+                                    match msg {
+                                        ActorMessage::Ref(msg) => {
+                                            new = true;
+                                            cache_ref.add_concurrent(
+                                                msg,
+                                                act.as_ref().unwrap(),
+                                                ctx.as_ref().unwrap(),
+                                            );
+                                        }
+                                        ActorMessage::Mut(msg) => {
+                                            cache_mut.add_exclusive(
+                                                msg,
+                                                act.as_mut().unwrap(),
+                                                ctx.as_mut().unwrap(),
+                                            );
+                                            return self.poll(cx);
+                                        }
+                                        _ => unreachable!(),
                                     }
-                                    ActorMessage::Mut(msg) => {
-                                        cache_mut.add_exclusive(
-                                            msg,
-                                            act.as_mut().unwrap(),
-                                            ctx.as_mut().unwrap(),
-                                        );
-                                        return self.poll(cx);
-                                    }
-                                    _ => unreachable!(),
                                 }
                             }
+                            Poll::Pending => i += 1,
                         }
-                        Poll::Pending => i += 1,
                     }
-                }
 
-                // poll interval message.
-                let mut i = 0;
-                while i < interval_cache.len() {
-                    match Pin::new(&mut interval_cache[i]).poll_next(cx) {
-                        Poll::Ready(Some(msg)) => match msg {
-                            ActorMessage::Ref(msg) => {
-                                new = true;
-                                cache_ref.add_concurrent(
-                                    msg,
-                                    act.as_ref().unwrap(),
-                                    ctx.as_ref().unwrap(),
-                                );
+                    // poll interval message.
+                    let mut i = 0;
+                    while i < interval_cache.len() {
+                        match Pin::new(&mut interval_cache[i]).poll_next(cx) {
+                            Poll::Ready(Some(msg)) => match msg {
+                                ActorMessage::Ref(msg) => {
+                                    new = true;
+                                    cache_ref.add_concurrent(
+                                        msg,
+                                        act.as_ref().unwrap(),
+                                        ctx.as_ref().unwrap(),
+                                    );
+                                }
+                                ActorMessage::Mut(msg) => {
+                                    cache_mut.add_exclusive(
+                                        msg,
+                                        act.as_mut().unwrap(),
+                                        ctx.as_mut().unwrap(),
+                                    );
+                                    return self.poll(cx);
+                                }
+                                _ => unreachable!(),
+                            },
+                            // interval message is canceled by ContextJoinHandle
+                            Poll::Ready(None) => {
+                                // SAFETY:
+                                // Vec::swap_remove with no len check and drop of removed element in
+                                // place.
+                                // i is guaranteed to be smaller than interval_cache.len()
+                                unsafe {
+                                    interval_cache.swap_remove_uncheck(i);
+                                }
                             }
-                            ActorMessage::Mut(msg) => {
-                                cache_mut.add_exclusive(
-                                    msg,
-                                    act.as_mut().unwrap(),
-                                    ctx.as_mut().unwrap(),
-                                );
-                                return self.poll(cx);
-                            }
-                            _ => unreachable!(),
-                        },
-                        // interval message is canceled by ContextJoinHandle
-                        Poll::Ready(None) => {
-                            // SAFETY:
-                            // Vec::swap_remove with no len check and drop of removed element in
-                            // place.
-                            // i is guaranteed to be smaller than interval_cache.len()
-                            unsafe {
-                                interval_cache.swap_remove_uncheck(i);
-                            }
+                            Poll::Pending => i += 1,
                         }
-                        Poll::Pending => i += 1,
                     }
                 }
 
@@ -537,16 +568,15 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                     ctx.as_mut().unwrap().stop();
                                 }
                                 ActorState::Stop => {
-                                    ctx.as_mut().unwrap().stop();
                                     let ctx = ctx.take().unwrap();
+                                    ctx.stop();
                                     let act = act.take().unwrap();
                                     let drop_notify = drop_notify.take();
-                                    self.as_mut().set(ContextWithActor::Stopping {
-                                        ctx,
+                                    self.as_mut().set(ContextWithActor::new_stopping(
                                         act,
-                                        on_stop: None,
+                                        ctx,
                                         drop_notify,
-                                    });
+                                    ));
                                     return self.poll(cx);
                                 }
                                 _ => {}

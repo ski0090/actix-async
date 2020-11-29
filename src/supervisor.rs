@@ -14,6 +14,9 @@ use crate::util::channel::channel;
 /// Supervisor can start multiple instance of same actor on multiple `actix_rt::Arbiter`.
 /// Instances of same actor share the same `Addr` and use would steal work from it for.
 ///
+/// It also guards the actor's drop and partially recover them from panic.
+/// (Due to no task level panic catch. Cache futures in `Context` will be cleared after recovery)
+///
 /// *. `Supervisor` is enabled with `actix-rt` feature flag
 pub struct Supervisor {
     arb: Vec<Arbiter>,
@@ -123,7 +126,7 @@ impl Supervisor {
                     let actor = f(&mut ctx).await;
 
                     SupervisorFut {
-                        fut: Some(ContextWithActor::new(actor, ctx)),
+                        fut: Some(ContextWithActor::new_starting(actor, ctx)),
                     }
                     .await;
                 });
@@ -147,7 +150,7 @@ impl<A: Actor> Default for SupervisorFut<A> {
 
 impl<A: Actor> Drop for SupervisorFut<A> {
     fn drop(&mut self) {
-        if !self.fut.as_ref().unwrap().is_stopped() {
+        if self.fut.as_ref().unwrap().is_running() {
             let mut fut = core::mem::take(self);
 
             // TODO: catch panic on task level and not clear all.
@@ -165,10 +168,10 @@ impl<A: Actor> Future for SupervisorFut<A> {
         match Pin::new(self.fut.as_mut().unwrap()).poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(()) => {
-                if self.fut.as_ref().unwrap().is_stopped() {
-                    Poll::Ready(())
-                } else {
+                if self.fut.as_ref().unwrap().is_running() {
                     self.poll(cx)
+                } else {
+                    Poll::Ready(())
                 }
             }
         }

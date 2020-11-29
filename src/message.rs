@@ -249,6 +249,7 @@ impl<A: Actor> Stream for IntervalMessage<A> {
         match Pin::new(&mut this.delay).poll(cx) {
             Poll::Ready(_) => {
                 this.delay = A::sleep(this.dur);
+                // wake self one more time to register the new sleep.
                 cx.waker().wake_by_ref();
                 Poll::Ready(Some(this.msg.clone()))
             }

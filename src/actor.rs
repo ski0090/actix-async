@@ -162,7 +162,7 @@ pub trait Actor: Sized + 'static {
 
             let actor = f(&mut ctx).await;
 
-            ContextWithActor::new(actor, ctx).await;
+            ContextWithActor::new_starting(actor, ctx).await;
         });
     }
 }

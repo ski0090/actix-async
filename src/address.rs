@@ -82,6 +82,9 @@ impl<A: Actor> Addr<A> {
     }
 
     /// send a message to actor and ignore the result.
+    ///
+    /// *. `do_send` is just a `send` put into `RuntimeService::spawn`. The message does not
+    /// bypass actor's channel capacity or have a higher priority.
     pub fn do_send<M>(&self, msg: M)
     where
         M: Message + Send,
@@ -91,6 +94,9 @@ impl<A: Actor> Addr<A> {
     }
 
     /// send a exclusive message to actor and ignore the result.
+    ///
+    /// *. `do_wait` is just a `wait` put into `RuntimeService::spawn`. The message does not
+    /// bypass actor's channel capacity or have a higher priority.
     pub fn do_wait<M>(&self, msg: M)
     where
         M: Message + Send,
@@ -100,6 +106,7 @@ impl<A: Actor> Addr<A> {
     }
 
     /// stop actor.
+    ///
     /// When graceful is true the actor would shut it's channel and drain all remaining messages
     /// and exit. When false the actor would exit as soon as the stop message is handled.
     pub fn stop(&self, graceful: bool) -> MessageRequest<A, ()> {
@@ -117,7 +124,9 @@ impl<A: Actor> Addr<A> {
         )
     }
 
-    /// weak version of Addr that can be upgraded.
+    /// Weak version of Addr that can be upgraded.
+    ///
+    /// The upgrade would fail if no `Addr` is alive anywhere.
     pub fn downgrade(&self) -> WeakAddr<A> {
         WeakAddr(Sender::downgrade(&self.0))
     }
@@ -210,6 +219,9 @@ impl<A> Clone for WeakAddr<A> {
 }
 
 impl<A: Actor> WeakAddr<A> {
+    /// Try to upgrade to a `Addr`
+    ///
+    /// The upgrade would fail if no `Addr` is alive anywhere.
     pub fn upgrade(&self) -> Option<Addr<A>> {
         self.0.upgrade().map(Addr)
     }

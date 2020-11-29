@@ -50,7 +50,7 @@
 //! }
 //! ```
 
-// #![no_std]
+#![no_std]
 #![forbid(unused_imports, unused_mut)]
 #![deny(unused_variables)]
 
