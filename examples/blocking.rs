@@ -27,8 +27,8 @@ impl Handler<Msg> for BlockingActor {
         unimplemented!()
     }
 
-    // since we are running pure blocking code. There is no meaning using concurrent handler at all.
-    // so use handle_wait would do just fine.
+    // since we are running pure blocking code. There is no point using concurrent handler at
+    // all. so use handle_wait would do just fine.
     async fn handle_wait(&mut self, _: Msg, ctx: &mut Context<Self>) {
         // use sleep to simulate heavy blocking computation.
         std::thread::sleep(Duration::from_millis(1));
@@ -38,7 +38,7 @@ impl Handler<Msg> for BlockingActor {
         let now = Instant::now();
         ctx.run_later(Duration::from_millis(1), move |_, _| {
             Box::pin(async move {
-                println!("delayed task took {:?} to run", now.elapsed(),);
+                println!("delayed task took {:?} to run", now.elapsed());
             })
         });
     }

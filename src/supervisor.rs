@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use actix_rt::Arbiter;
 
-use crate::actor::{Actor, CHANNEL_CAP};
+use crate::actor::Actor;
 use crate::address::Addr;
 use crate::context::{Context, ContextWithActor};
 use crate::util::channel::channel;
@@ -15,7 +15,8 @@ use crate::util::channel::channel;
 /// Instances of same actor share the same `Addr` and use would steal work from it for.
 ///
 /// It also guards the actor's drop and partially recover them from panic.
-/// (Due to no task level panic catch. Cache futures in `Context` will be cleared after recovery)
+/// (Due to no task level panic catch. Cache futures/streams in `Context` will be cleared after
+/// recovery)
 ///
 /// *. `Supervisor` is enabled with `actix-rt` feature flag
 pub struct Supervisor {
@@ -113,7 +114,7 @@ impl Supervisor {
         F: FnOnce(&mut Context<A>) -> Fut + Copy + Send + Sync + 'static,
         Fut: Future<Output = A>,
     {
-        let (tx, rx) = channel(CHANNEL_CAP);
+        let (tx, rx) = channel(A::size_hint() * count);
 
         (0..count).for_each(|_| {
             let rx = rx.clone();

@@ -4,6 +4,11 @@ use actix_async::actor;
 use actix_async::prelude::*;
 use futures_util::FutureExt;
 
+/*
+    It's possible to use actix-async without Message and Handler impl.
+    Addr can run any closure return a boxed future referencing Actor and/or it's Context.
+*/
+
 struct ClosureActor(usize);
 
 // impl actor trait.

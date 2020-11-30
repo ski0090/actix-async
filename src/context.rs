@@ -1,5 +1,6 @@
 use core::cell::{Cell, RefCell};
 use core::future::Future;
+use core::marker::PhantomData;
 use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
@@ -7,7 +8,7 @@ use core::time::Duration;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use crate::actor::{Actor, ActorState, CHANNEL_CAP};
+use crate::actor::{Actor, ActorState};
 use crate::address::Addr;
 use crate::handler::Handler;
 use crate::message::{
@@ -170,7 +171,14 @@ impl<A: Actor> Context<A> {
     ///
     /// #[async_trait::async_trait(?Send)]
     /// impl Handler<StreamMessage> for StreamActor {
-    ///     async fn handle(&self, _: StreamMessage, _: &Context<Self>) {}
+    ///     async fn handle(&self, _: StreamMessage, _: &Context<Self>) {
+    ///     /*
+    ///         The stream is owned by Context so there is no default way to return anything
+    ///         from the handler.
+    ///         A suggest way to return anything here is to use a channel sender or another
+    ///         actor's Addr to StreamActor as it's state.
+    ///     */
+    ///     }
     /// }
     ///
     /// #[actix_rt::main]
@@ -223,11 +231,11 @@ impl<A: Actor> Context<A> {
 
 type Task = LocalBoxFuture<'static, ()>;
 
-pub(crate) struct CacheRef(Vec<Task>);
+pub(crate) struct CacheRef<A>(Vec<Task>, PhantomData<A>);
 
-impl CacheRef {
+impl<A: Actor> CacheRef<A> {
     fn new() -> Self {
-        Self(Vec::with_capacity(CHANNEL_CAP))
+        Self(Vec::with_capacity(A::size_hint()), PhantomData)
     }
 
     fn poll_unpin(&mut self, cx: &mut StdContext<'_>) {
@@ -252,7 +260,7 @@ impl CacheRef {
         self.0.is_empty()
     }
 
-    fn add_concurrent<A: Actor>(&mut self, mut msg: MessageObject<A>, act: &A, ctx: &Context<A>) {
+    fn add_concurrent(&mut self, mut msg: MessageObject<A>, act: &A, ctx: &Context<A>) {
         self.0.push(msg.handle(act, ctx));
     }
 
@@ -302,7 +310,7 @@ pin_project_lite::pin_project! {
             act: Option<A>,
             ctx: Option<Context<A>>,
             cache_mut: CacheMut,
-            cache_ref: CacheRef,
+            cache_ref: CacheRef<A>,
             future_cache: Vec<FutureMessage<A>>,
             stream_cache: Vec<StreamMessage<A>>,
             drop_notify: Option<OneshotSender<()>>,
@@ -448,8 +456,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                         match Pin::new(&mut future_cache[i]).poll(cx) {
                             Poll::Ready(msg) => {
                                 // SAFETY:
-                                // Vec::swap_remove with no len check and drop of removed element in
-                                // place.
+                                // Vec::swap_remove with no len check and drop of removed element
+                                // in place.
                                 // i is guaranteed to be smaller than delay_cache.len()
                                 unsafe {
                                     future_cache.swap_remove_uncheck(i);
@@ -482,7 +490,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                         }
                     }
 
-                    // poll interval message.
+                    // poll stream message.
                     let mut i = 0;
                     while i < stream_cache.len() {
                         match Pin::new(&mut stream_cache[i]).poll_next(cx) {
@@ -505,11 +513,11 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                 }
                                 _ => unreachable!(),
                             },
-                            // interval message is canceled by ContextJoinHandle
+                            // stream message is either canceled by ContextJoinHandle or finished.
                             Poll::Ready(None) => {
                                 // SAFETY:
-                                // Vec::swap_remove with no len check and drop of removed element in
-                                // place.
+                                // Vec::swap_remove with no len check and drop of removed element
+                                // in place.
                                 // i is guaranteed to be smaller than interval_cache.len()
                                 unsafe {
                                     stream_cache.swap_remove_uncheck(i);
@@ -643,7 +651,10 @@ impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
     }
 }
 
+// SAFETY:
+
 // swap remove with index. do not check for overflow.
+// caller is in charge of check the index to make sure it's smaller than then length.
 trait SwapRemoveUncheck {
     unsafe fn swap_remove_uncheck(&mut self, index: usize);
 }

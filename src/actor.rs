@@ -10,7 +10,7 @@ use crate::runtime::RuntimeService;
 use crate::util::channel::{channel, Receiver};
 use crate::util::futures::LocalBoxFuture;
 
-pub(crate) const CHANNEL_CAP: usize = 256;
+const CHANNEL_CAP: usize = 256;
 
 /// trait for stateful async actor.
 pub trait Actor: Sized + 'static {
@@ -101,7 +101,7 @@ pub trait Actor: Sized + 'static {
         F: FnOnce(&mut Context<Self>) -> Fut + 'static,
         Fut: Future<Output = Self>,
     {
-        let (tx, rx) = channel(CHANNEL_CAP);
+        let (tx, rx) = channel(Self::size_hint());
 
         let tx = Addr::new(tx);
 
@@ -133,7 +133,7 @@ pub trait Actor: Sized + 'static {
         F: FnOnce(&mut Context<Self>) -> Fut + Send + 'static,
         Fut: Future<Output = Self>,
     {
-        let (tx, rx) = channel(CHANNEL_CAP);
+        let (tx, rx) = channel(Self::size_hint());
 
         let tx = Addr::new(tx);
 
@@ -144,10 +144,21 @@ pub trait Actor: Sized + 'static {
         tx
     }
 
+    /// capacity of the actor's channel. Limit the max count of on flight messages.
+    ///
+    /// Default to 256.
+    ///
+    /// *. `Supervisor` would adjust the channel size to `size_hint` * count of actor instances.
+    fn size_hint() -> usize {
+        CHANNEL_CAP
+    }
+
+    #[doc(hidden)]
     fn spawn<F: Future<Output = ()> + 'static>(f: F) {
         Self::Runtime::spawn(f)
     }
 
+    #[doc(hidden)]
     fn sleep(dur: Duration) -> <Self::Runtime as RuntimeService>::Sleep {
         Self::Runtime::sleep(dur)
     }
