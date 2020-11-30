@@ -259,8 +259,14 @@ impl<A: Actor> CacheRef<A> {
         self.0.is_empty()
     }
 
-    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: &Context<A>) {
-        self.0.push(msg.handle(act, ctx));
+    fn add_concurrent(
+        &mut self,
+        mut msg: Box<dyn MessageHandler<A>>,
+        act: &Option<A>,
+        ctx: &Option<Context<A>>,
+    ) {
+        self.0
+            .push(msg.handle(act.as_ref().unwrap(), ctx.as_ref().unwrap()));
     }
 
     fn clear(&mut self) {
@@ -286,10 +292,10 @@ impl CacheMut {
     fn add_exclusive<A: Actor>(
         &mut self,
         mut msg: Box<dyn MessageHandler<A>>,
-        act: &mut A,
-        ctx: &mut Context<A>,
+        act: &mut Option<A>,
+        ctx: &mut Option<Context<A>>,
     ) {
-        self.0 = Some(msg.handle_wait(act, ctx));
+        self.0 = Some(msg.handle_wait(act.as_mut().unwrap(), ctx.as_mut().unwrap()));
     }
 
     fn is_some(&self) -> bool {
@@ -344,12 +350,16 @@ impl<A: Actor> ContextWithActor<A> {
         }
     }
 
-    fn new_stopping(act: A, ctx: Context<A>, drop_notify: Option<OneshotSender<()>>) -> Self {
+    fn new_stopping(
+        act: &mut Option<A>,
+        ctx: &mut Option<Context<A>>,
+        drop_notify: &mut Option<OneshotSender<()>>,
+    ) -> Self {
         Self::Stopping {
-            act,
-            ctx,
+            act: act.take().unwrap(),
+            ctx: ctx.take().unwrap(),
             on_stop: None,
-            drop_notify,
+            drop_notify: drop_notify.take(),
         }
     }
 
@@ -369,13 +379,11 @@ impl<A: Actor> ContextWithActor<A> {
         if let ContextWithActor::Running {
             cache_ref,
             cache_mut,
-            stream_cache,
             ..
         } = self
         {
             cache_mut.clear();
             cache_ref.clear();
-            stream_cache.clear();
         }
     }
 }
@@ -391,9 +399,10 @@ impl<A: Actor> Future for ContextWithActor<A> {
                         *on_start = None;
                         let mut ctx = ctx.take();
                         let act = act.take();
-                        ctx.as_mut().unwrap().state.set(ActorState::Running);
 
+                        ctx.as_mut().unwrap().state.set(ActorState::Running);
                         self.as_mut().set(ContextWithActor::new_running(act, ctx));
+
                         self.poll(cx)
                     }
                     Poll::Pending => Poll::Pending,
@@ -408,8 +417,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                     // on_start transmute to static lifetime must be resolved before dropping or
                     // move Context and Actor.
                     let fut = unsafe { core::mem::transmute(act.on_start(ctx)) };
-
                     *on_start = Some(fut);
+
                     self.poll(cx)
                 }
             },
@@ -425,17 +434,15 @@ impl<A: Actor> Future for ContextWithActor<A> {
                 cache_ref.poll_unpin(cx);
 
                 // try to poll exclusive message.
-                if let Some(fut_mut) = cache_mut.get_mut() {
+                match cache_mut.get_mut() {
                     // still have concurrent messages. finish them.
-                    if !cache_ref.is_empty() {
-                        return Poll::Pending;
-                    }
-
+                    Some(_) if !cache_ref.is_empty() => return Poll::Pending,
                     // poll exclusive message and remove it when success.
-                    match fut_mut.as_mut().poll(cx) {
+                    Some(fut_mut) => match fut_mut.as_mut().poll(cx) {
                         Poll::Ready(_) => cache_mut.clear(),
                         Poll::Pending => return Poll::Pending,
-                    }
+                    },
+                    None => {}
                 }
 
                 // flag indicate if return pending or poll an extra round.
@@ -467,18 +474,10 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                     match msg {
                                         ActorMessage::Ref(msg) => {
                                             new = true;
-                                            cache_ref.add_concurrent(
-                                                msg,
-                                                act.as_ref().unwrap(),
-                                                ctx.as_ref().unwrap(),
-                                            );
+                                            cache_ref.add_concurrent(msg, act, ctx);
                                         }
                                         ActorMessage::Mut(msg) => {
-                                            cache_mut.add_exclusive(
-                                                msg,
-                                                act.as_mut().unwrap(),
-                                                ctx.as_mut().unwrap(),
-                                            );
+                                            cache_mut.add_exclusive(msg, act, ctx);
                                             return self.poll(cx);
                                         }
                                         _ => unreachable!(),
@@ -496,18 +495,10 @@ impl<A: Actor> Future for ContextWithActor<A> {
                             Poll::Ready(Some(msg)) => match msg {
                                 ActorMessage::Ref(msg) => {
                                     new = true;
-                                    cache_ref.add_concurrent(
-                                        msg,
-                                        act.as_ref().unwrap(),
-                                        ctx.as_ref().unwrap(),
-                                    );
+                                    cache_ref.add_concurrent(msg, act, ctx);
                                 }
                                 ActorMessage::Mut(msg) => {
-                                    cache_mut.add_exclusive(
-                                        msg,
-                                        act.as_mut().unwrap(),
-                                        ctx.as_mut().unwrap(),
-                                    );
+                                    cache_mut.add_exclusive(msg, act, ctx);
                                     return self.poll(cx);
                                 }
                                 _ => unreachable!(),
@@ -533,39 +524,24 @@ impl<A: Actor> Future for ContextWithActor<A> {
                         // new concurrent message. add it to cache_ref and continue.
                         Poll::Ready(Some(ActorMessage::Ref(msg))) => {
                             new = true;
-                            cache_ref.add_concurrent(
-                                msg,
-                                act.as_ref().unwrap(),
-                                ctx.as_ref().unwrap(),
-                            );
+                            cache_ref.add_concurrent(msg, act, ctx);
                         }
                         // new exclusive message. add it to cache_mut. No new messages should be accepted
                         // until this one is resolved.
                         Poll::Ready(Some(ActorMessage::Mut(msg))) => {
-                            cache_mut.add_exclusive(
-                                msg,
-                                act.as_mut().unwrap(),
-                                ctx.as_mut().unwrap(),
-                            );
+                            cache_mut.add_exclusive(msg, act, ctx);
                             return self.poll(cx);
                         }
                         Poll::Ready(Some(ActorMessage::ActorState(state, notify))) => {
                             *drop_notify = Some(notify);
 
                             match state {
-                                ActorState::StopGraceful => {
-                                    ctx.as_mut().unwrap().stop();
-                                }
+                                ActorState::StopGraceful => ctx.as_mut().unwrap().stop(),
                                 ActorState::Stop => {
-                                    let ctx = ctx.take().unwrap();
-                                    ctx.stop();
-                                    let act = act.take().unwrap();
-                                    let drop_notify = drop_notify.take();
-                                    self.as_mut().set(ContextWithActor::new_stopping(
-                                        act,
-                                        ctx,
-                                        drop_notify,
-                                    ));
+                                    ctx.as_mut().unwrap().stop();
+                                    let state =
+                                        ContextWithActor::new_stopping(act, ctx, drop_notify);
+                                    self.as_mut().set(state);
                                     return self.poll(cx);
                                 }
                                 _ => {}
@@ -578,15 +554,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                             } else if !cache_ref.is_empty() || cache_mut.is_some() {
                                 Poll::Pending
                             } else {
-                                let ctx = ctx.take().unwrap();
-                                let act = act.take().unwrap();
-                                let drop_notify = drop_notify.take();
-                                self.as_mut().set(ContextWithActor::Stopping {
-                                    ctx,
-                                    act,
-                                    on_stop: None,
-                                    drop_notify,
-                                });
+                                let state = ContextWithActor::new_stopping(act, ctx, drop_notify);
+                                self.as_mut().set(state);
                                 self.poll(cx)
                             };
                         }
@@ -618,8 +587,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                     // on_stop transmute to static lifetime must be resolved before dropping or
                     // move Context and Actor.
                     let fut = unsafe { core::mem::transmute(act.on_stop(ctx)) };
-
                     *on_stop = Some(fut);
+
                     self.poll(cx)
                 }
             },

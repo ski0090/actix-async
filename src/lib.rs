@@ -99,6 +99,7 @@ mod test {
 
     use crate as actix_async;
     use actix_async::prelude::*;
+    use actix_async::supervisor::Supervisor;
 
     #[actix_rt::test]
     async fn start_in_arbiter() {
@@ -263,6 +264,18 @@ mod test {
         assert_eq!(2, state.load(Ordering::SeqCst));
     }
 
+    #[actix_rt::test]
+    async fn test_panic_recovery() {
+        let mut supervisor = Supervisor::new(1);
+        let addr = supervisor.start_in_arbiter(1, |_| TestActor::default());
+
+        let _ = addr.send(TestPanicMsg).await;
+        sleep(Duration::from_millis(1000)).await;
+        let res = addr.send(TestMessage).await;
+
+        assert_eq!(996, res.unwrap());
+    }
+
     struct TestActor(usize);
 
     impl Default for TestActor {
@@ -365,6 +378,17 @@ mod test {
                     act.0 += 1;
                 })
             })
+        }
+    }
+
+    struct TestPanicMsg;
+
+    message!(TestPanicMsg, ());
+
+    #[async_trait(?Send)]
+    impl Handler<TestPanicMsg> for TestActor {
+        async fn handle(&self, _: TestPanicMsg, _: &Context<Self>) {
+            panic!("This is a purpose panic to test actor recovery");
         }
     }
 }
