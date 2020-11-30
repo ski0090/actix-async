@@ -146,7 +146,7 @@ pub trait Actor: Sized + 'static {
 
     /// capacity of the actor's channel. Limit the max count of on flight messages.
     ///
-    /// Default to 256.
+    /// Default to `256`.
     ///
     /// *. `Supervisor` would adjust the channel size to `size_hint` * count of actor instances.
     fn size_hint() -> usize {

@@ -1,5 +1,6 @@
 use core::future::{ready, Future};
 use core::pin::Pin;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context as StdContext, Poll};
 
 use alloc::vec::Vec;
@@ -10,6 +11,7 @@ use crate::actor::Actor;
 use crate::address::Addr;
 use crate::context::{Context, ContextWithActor};
 use crate::util::channel::channel;
+use crate::util::smart_pointer::RefCounter;
 
 /// Supervisor can start multiple instance of same actor on multiple `actix_rt::Arbiter`.
 /// Instances of same actor share the same `Addr` and use would steal work from it for.
@@ -21,25 +23,34 @@ use crate::util::channel::channel;
 /// *. `Supervisor` is enabled with `actix-rt` feature flag
 pub struct Supervisor {
     arb: Vec<Arbiter>,
-    next: usize,
+    next: RefCounter<AtomicUsize>,
+}
+
+impl Clone for Supervisor {
+    fn clone(&self) -> Self {
+        Self {
+            arb: self.arb.to_vec(),
+            next: self.next.clone(),
+        }
+    }
 }
 
 impl Supervisor {
-    /// Construct a new supervisor with the given worker count. Every worker would run on it's own
-    /// thread and can have multiple actors run on it.
+    /// Construct a new supervisor with the given worker count. Every worker would run on it's
+    /// own thread and can have multiple actors run on it.
     ///
     /// *. It's suggested only one `Supervisor` instance is used for the entire program.
     pub fn new(workers: usize) -> Self {
         Self {
             arb: (0..workers).map(|_| Arbiter::new()).collect(),
-            next: 0,
+            next: RefCounter::new(AtomicUsize::new(0)),
         }
     }
 
     /// Start multiple actor instance with `Supervisor`. These instances would start in
     /// `actix_rt::Arbiter` using a simple round robin schedule.
     ///
-    /// #example:
+    /// # example:
     /// ```rust
     /// use std::sync::Arc;
     /// use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,7 +83,7 @@ impl Supervisor {
     /// #[actix_rt::main]
     /// async fn main() {
     ///     // start a supervisor with 4 worker arbiters.
-    ///     let mut supervisor = Supervisor::new(4);
+    ///     let supervisor = Supervisor::new(4);
     ///
     ///     // start 4 TestActor instances in supervisor.
     ///     let addr = supervisor.start_in_arbiter(4, move |_| TestActor);
@@ -99,9 +110,15 @@ impl Supervisor {
     ///
     ///     // we should have at least 2-4 unique thread id here.
     ///     assert!(len > 1);
+    ///
+    ///     // supervisor is thread safe and cloneable.
+    ///     let s = supervisor.clone();
+    ///     std::thread::spawn(move || {
+    ///         let s = s;
+    ///     });
     /// }
     /// ```
-    pub fn start_in_arbiter<A: Actor, F>(&mut self, count: usize, f: F) -> Addr<A>
+    pub fn start_in_arbiter<A: Actor, F>(&self, count: usize, f: F) -> Addr<A>
     where
         F: FnOnce(&mut Context<A>) -> A + Copy + Send + Sync + 'static,
     {
@@ -109,7 +126,7 @@ impl Supervisor {
     }
 
     /// async version of start_in_arbiter.
-    pub fn start_in_arbiter_async<A: Actor, F, Fut>(&mut self, count: usize, f: F) -> Addr<A>
+    pub fn start_in_arbiter_async<A: Actor, F, Fut>(&self, count: usize, f: F) -> Addr<A>
     where
         F: FnOnce(&mut Context<A>) -> Fut + Copy + Send + Sync + 'static,
         Fut: Future<Output = A>,
@@ -118,7 +135,7 @@ impl Supervisor {
 
         (0..count).for_each(|_| {
             let rx = rx.clone();
-            let off = self.next % self.arb.len();
+            let off = self.next.fetch_add(1, Ordering::Relaxed) % self.arb.len();
 
             self.arb[off].exec_fn(move || {
                 A::spawn(async move {
@@ -132,7 +149,6 @@ impl Supervisor {
                     .await;
                 });
             });
-            self.next += 1;
         });
 
         Addr::new(tx)
@@ -168,13 +184,20 @@ impl<A: Actor> Future for SupervisorFut<A> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         match Pin::new(self.fut.as_mut().unwrap()).poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(()) => {
-                if self.fut.as_ref().unwrap().is_running() {
-                    self.poll(cx)
-                } else {
-                    Poll::Ready(())
-                }
-            }
+            Poll::Ready(()) if self.fut.as_ref().unwrap().is_running() => self.poll(cx),
+            Poll::Ready(()) => Poll::Ready(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn supervisor_bound() {
+        fn send_sync_clone<T: Send + Sync + Clone + 'static>() {};
+
+        send_sync_clone::<Supervisor>();
     }
 }

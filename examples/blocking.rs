@@ -27,8 +27,8 @@ impl Handler<Msg> for BlockingActor {
         unimplemented!()
     }
 
-    // since we are running pure blocking code. There is no point using concurrent handler at
-    // all. so use handle_wait would do just fine.
+    // since we are running pure blocking code. There is no point using concurrent handler
+    // at all. use handle_wait would do just fine.
     async fn handle_wait(&mut self, _: Msg, ctx: &mut Context<Self>) {
         // use sleep to simulate heavy blocking computation.
         std::thread::sleep(Duration::from_millis(1));
@@ -48,7 +48,7 @@ impl Handler<Msg> for BlockingActor {
 async fn main() {
     // construct a supervisor with 2 worker threads.
     // *. Supervisor runs on actix-runtime (uses tokio-runtime under the hood).
-    let mut supervisor = Supervisor::new(2);
+    let supervisor = Supervisor::new(2);
 
     // start 2 instance of BlockingActor in supervisor.
     let addr = supervisor.start_in_arbiter(2, |_| BlockingActor);

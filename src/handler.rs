@@ -197,6 +197,7 @@ where
     }
 }
 
+#[inline]
 fn handle<F>(tx: Option<OneshotSender<F::Output>>, fut: F) -> LocalBoxFuture<'static, ()>
 where
     F: Future + 'static,

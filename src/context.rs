@@ -237,6 +237,7 @@ impl<A: Actor> CacheRef<A> {
         Self(Vec::with_capacity(A::size_hint()), PhantomData)
     }
 
+    #[inline]
     fn poll_unpin(&mut self, cx: &mut StdContext<'_>) {
         // poll concurrent messages
         let mut i = 0;
@@ -255,10 +256,12 @@ impl<A: Actor> CacheRef<A> {
         }
     }
 
+    #[inline]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    #[inline]
     fn add_concurrent(
         &mut self,
         mut msg: Box<dyn MessageHandler<A>>,
@@ -281,14 +284,17 @@ impl CacheMut {
         Self(None)
     }
 
+    #[inline]
     fn get_mut(&mut self) -> Option<&mut Task> {
         self.0.as_mut()
     }
 
+    #[inline]
     fn clear(&mut self) {
         self.0 = None;
     }
 
+    #[inline]
     fn add_exclusive<A: Actor>(
         &mut self,
         mut msg: Box<dyn MessageHandler<A>>,
@@ -298,6 +304,7 @@ impl CacheMut {
         self.0 = Some(msg.handle_wait(act.as_mut().unwrap(), ctx.as_mut().unwrap()));
     }
 
+    #[inline]
     fn is_some(&self) -> bool {
         self.0.is_some()
     }
@@ -602,6 +609,7 @@ trait MergeContext<A: Actor> {
 }
 
 impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
+    #[inline]
     fn merge(&mut self, ctx: &mut Context<A>) {
         let stream = ctx.stream_message.get_mut();
         while let Some(stream) = stream.pop() {
@@ -611,6 +619,7 @@ impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
 }
 
 impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
+    #[inline]
     fn merge(&mut self, ctx: &mut Context<A>) {
         let future = ctx.future_message.get_mut();
         while let Some(future) = future.pop() {
@@ -627,6 +636,7 @@ trait SwapRemoveUncheck {
 }
 
 impl<T> SwapRemoveUncheck for Vec<T> {
+    #[inline]
     unsafe fn swap_remove_uncheck(&mut self, i: usize) {
         let len = self.len();
         let mut last = core::ptr::read(self.as_ptr().add(len - 1));

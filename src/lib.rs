@@ -266,7 +266,7 @@ mod test {
 
     #[actix_rt::test]
     async fn test_panic_recovery() {
-        let mut supervisor = Supervisor::new(1);
+        let supervisor = Supervisor::new(1);
         let addr = supervisor.start_in_arbiter(1, |_| TestActor::default());
 
         let _ = addr.send(TestPanicMsg).await;
