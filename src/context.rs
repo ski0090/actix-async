@@ -10,10 +10,10 @@ use alloc::vec::Vec;
 
 use crate::actor::{Actor, ActorState};
 use crate::address::Addr;
-use crate::handler::Handler;
+use crate::handler::{Handler, MessageHandler};
 use crate::message::{
     ActorMessage, ActorMessageClone, FunctionMessage, FunctionMutMessage, FutureMessage,
-    IntervalMessage, Message, MessageObject, StreamContainer, StreamMessage,
+    IntervalMessage, Message, StreamContainer, StreamMessage,
 };
 use crate::util::channel::{oneshot, OneshotReceiver, OneshotSender, Receiver};
 use crate::util::futures::{LocalBoxFuture, Stream};
@@ -105,9 +105,9 @@ impl<A: Actor> Context<A> {
         F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, ()> + 'static,
     {
         self.later(|rx| {
-            let msg = FunctionMessage::new(f);
-            let msg = MessageObject::new(msg, None);
-            FutureMessage::new(dur, rx, ActorMessage::Ref(msg))
+            let msg = FunctionMessage::<_, ()>::new(f);
+            let msg = ActorMessage::new_ref(msg, None);
+            FutureMessage::new(dur, rx, msg)
         })
     }
 
@@ -119,9 +119,9 @@ impl<A: Actor> Context<A> {
         F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, ()> + 'static,
     {
         self.later(|rx| {
-            let msg = FunctionMutMessage::new(f);
-            let msg = MessageObject::new(msg, None);
-            FutureMessage::new(dur, rx, ActorMessage::Mut(msg))
+            let msg = FunctionMutMessage::<_, ()>::new(f);
+            let msg = ActorMessage::new_mut(msg, None);
+            FutureMessage::new(dur, rx, msg)
         })
     }
 
@@ -130,7 +130,6 @@ impl<A: Actor> Context<A> {
         F: FnOnce(OneshotReceiver<()>) -> FutureMessage<A>,
     {
         let (handle, rx) = oneshot();
-
         self.future_message.borrow_mut().push(f(rx));
         ContextJoinHandle { handle }
     }
@@ -195,7 +194,7 @@ impl<A: Actor> Context<A> {
         S::Item: Message + 'static,
         A: Handler<S::Item>,
     {
-        self.stream(stream, ActorMessage::Ref)
+        self.stream(stream, |item| ActorMessage::new_ref(item, None))
     }
 
     /// add a stream to context. multiple stream can be added to one context.
@@ -207,7 +206,7 @@ impl<A: Actor> Context<A> {
         S::Item: Message + 'static,
         A: Handler<S::Item>,
     {
-        self.stream(stream, ActorMessage::Mut)
+        self.stream(stream, |item| ActorMessage::new_mut(item, None))
     }
 
     fn stream<S, F>(&self, stream: S, f: F) -> ContextJoinHandle
@@ -215,7 +214,7 @@ impl<A: Actor> Context<A> {
         S: Stream + 'static,
         S::Item: Message + 'static,
         A: Handler<S::Item>,
-        F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy + 'static,
+        F: FnOnce(S::Item) -> ActorMessage<A> + Copy + 'static,
     {
         let (handle, rx) = oneshot();
         let stream = StreamContainer::new(stream, rx, f);
@@ -260,7 +259,7 @@ impl<A: Actor> CacheRef<A> {
         self.0.is_empty()
     }
 
-    fn add_concurrent(&mut self, mut msg: MessageObject<A>, act: &A, ctx: &Context<A>) {
+    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: &Context<A>) {
         self.0.push(msg.handle(act, ctx));
     }
 
@@ -286,7 +285,7 @@ impl CacheMut {
 
     fn add_exclusive<A: Actor>(
         &mut self,
-        mut msg: MessageObject<A>,
+        mut msg: Box<dyn MessageHandler<A>>,
         act: &mut A,
         ctx: &mut Context<A>,
     ) {
@@ -551,7 +550,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                             return self.poll(cx);
                         }
                         Poll::Ready(Some(ActorMessage::ActorState(state, notify))) => {
-                            *drop_notify = notify;
+                            *drop_notify = Some(notify);
 
                             match state {
                                 ActorState::StopGraceful => {
@@ -635,24 +634,23 @@ trait MergeContext<A: Actor> {
 
 impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
     fn merge(&mut self, ctx: &mut Context<A>) {
-        let delay = ctx.stream_message.get_mut();
-        while let Some(delay) = delay.pop() {
-            self.push(delay);
+        let stream = ctx.stream_message.get_mut();
+        while let Some(stream) = stream.pop() {
+            self.push(stream);
         }
     }
 }
 
 impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
     fn merge(&mut self, ctx: &mut Context<A>) {
-        let delay = ctx.future_message.get_mut();
-        while let Some(delay) = delay.pop() {
-            self.push(delay);
+        let future = ctx.future_message.get_mut();
+        while let Some(future) = future.pop() {
+            self.push(future);
         }
     }
 }
 
 // SAFETY:
-
 // swap remove with index. do not check for overflow.
 // caller is in charge of check the index to make sure it's smaller than then length.
 trait SwapRemoveUncheck {

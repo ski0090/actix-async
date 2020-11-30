@@ -1,6 +1,5 @@
 use core::future::Future;
 use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
@@ -101,45 +100,18 @@ impl<M: Message> MessageContainer<M> {
     }
 }
 
-// main type wrapper for all types of message goes to actor.
-pub struct MessageObject<A>(Box<dyn MessageHandler<A>>);
-
 /*
     SAFETY:
-    Message object is construct from either `Context` or `Addr`.
+    Message container is construct from either `Context` or `Addr`.
 
-    *. When it's constructed through `Addr`. The caller must make sure the `Message` type passed to
-       `MessageObject::new` is `Send` bound as the object would possibly sent to another thread.
-    *. When it's constructed through `Context`. The object remain on it's thread and never move to
-       other threads so it's safe to bound to `Send` regardless.
+    *. When it's constructed through `Addr`. The caller must make sure the `Message` type passed
+       to it is `Send` bound as the object would possibly sent to another thread.
+    *. When it's constructed through `Context`. The container remain on it's thread and never
+       move to other threads so it's safe to bound to `Send` regardless.
 */
-unsafe impl<A> Send for MessageObject<A> {}
+unsafe impl<M: Message> Send for MessageContainer<M> {}
 
 pub(crate) fn message_send_check<M: Message + Send>() {}
-
-impl<A> MessageObject<A> {
-    pub(crate) fn new<M>(msg: M, tx: Option<OneshotSender<M::Result>>) -> MessageObject<A>
-    where
-        A: Actor + Handler<M>,
-        M: Message,
-    {
-        MessageObject(Box::new(MessageContainer { msg: Some(msg), tx }))
-    }
-}
-
-impl<A> Deref for MessageObject<A> {
-    type Target = dyn MessageHandler<A>;
-
-    fn deref(&self) -> &Self::Target {
-        &*self.0
-    }
-}
-
-impl<A> DerefMut for MessageObject<A> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.0
-    }
-}
 
 // intern type for cloning a MessageObject.
 pub(crate) enum ActorMessageClone<A> {
@@ -158,7 +130,7 @@ impl<A: Actor> ActorMessageClone<A> {
 }
 
 pub(crate) trait MessageObjectClone<A> {
-    fn clone_object(&self) -> MessageObject<A>;
+    fn clone_object(&self) -> Box<dyn MessageHandler<A> + Send>;
 }
 
 impl<A, M> MessageObjectClone<A> for M
@@ -166,8 +138,11 @@ where
     A: Actor + Handler<M>,
     M: Message + Sized + Clone + 'static,
 {
-    fn clone_object(&self) -> MessageObject<A> {
-        MessageObject::new(self.clone(), None)
+    fn clone_object(&self) -> Box<dyn MessageHandler<A> + Send> {
+        Box::new(MessageContainer {
+            msg: Some(self.clone()),
+            tx: None,
+        })
     }
 }
 
@@ -312,7 +287,7 @@ where
     A: Actor + Handler<S::Item>,
     S: Stream,
     S::Item: Message,
-    F: FnOnce(MessageObject<A>) -> ActorMessage<A> + Copy,
+    F: FnOnce(S::Item) -> ActorMessage<A> + Copy,
 {
     type Item = ActorMessage<A>;
 
@@ -331,8 +306,7 @@ where
 
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(item)) => {
-                let msg = MessageObject::new(item, None);
-                let msg = (this.f)(msg);
+                let msg = (this.f)(item);
                 Poll::Ready(Some(msg))
             }
             Poll::Ready(None) => Poll::Ready(None),
@@ -343,7 +317,25 @@ where
 
 // main type of message goes through actor's channel.
 pub enum ActorMessage<A> {
-    Ref(MessageObject<A>),
-    Mut(MessageObject<A>),
-    ActorState(ActorState, Option<OneshotSender<()>>),
+    Ref(Box<dyn MessageHandler<A> + Send>),
+    Mut(Box<dyn MessageHandler<A> + Send>),
+    ActorState(ActorState, OneshotSender<()>),
+}
+
+impl<A> ActorMessage<A> {
+    pub(crate) fn new_ref<M>(msg: M, tx: Option<OneshotSender<M::Result>>) -> Self
+    where
+        A: Handler<M>,
+        M: Message,
+    {
+        Self::Ref(Box::new(MessageContainer { msg: Some(msg), tx }))
+    }
+
+    pub(crate) fn new_mut<M>(msg: M, tx: Option<OneshotSender<M::Result>>) -> Self
+    where
+        A: Handler<M>,
+        M: Message,
+    {
+        Self::Mut(Box::new(MessageContainer { msg: Some(msg), tx }))
+    }
 }
