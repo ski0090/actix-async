@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use actix_async::prelude::*;
+use actix_rt::time::sleep;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::sync::Mutex;
@@ -35,12 +36,12 @@ impl Handler<Msg> for MyActor {
         // try to hold it for the entire scope. Leading to runtime borrow checker error.
         drop(state);
 
-        actix_rt::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
 
         // Rc can be cloned and used in spawned async tasks.
         let state = self.state_shared.clone();
         actix_rt::spawn(async move {
-            actix_rt::time::sleep(Duration::from_millis(1)).await;
+            sleep(Duration::from_millis(1)).await;
             drop(state);
         });
 
@@ -48,7 +49,7 @@ impl Handler<Msg> for MyActor {
         // This also applies to other async internal mutability primitives like Async RwLock.
         let mut state = self.state_mut_await.lock().await;
 
-        actix_rt::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
 
         // We held the mutable state across await point. But it comes with a cost.
         // The actor would be blocked on this message as long as the MutexGuard is held which means

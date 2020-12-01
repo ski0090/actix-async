@@ -31,6 +31,7 @@ actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-
 actix = "0.10.0"
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.42"
+doc-comment = "0.3.3"
 futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
 tokio = { version = "0.3.4", features = ["full"] }
 tokio02 = { package = "tokio", version = "0.2.23", features = ["full"] }

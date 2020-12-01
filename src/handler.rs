@@ -1,4 +1,5 @@
 use core::future::Future;
+use core::mem::transmute;
 
 use alloc::boxed::Box;
 
@@ -155,16 +156,16 @@ where
 
         /*
             SAFETY:
-            `MessageHandler::handle`can not tie to actor and context's lifetime. The reason is it
-            would assume the boxed futures would live as long as the actor and context. Making it
-            impossible to mutably borrow them from this point forward.
+            `MessageHandler::handle`can not tie to actor and context's lifetime.
+            The reason is it would assume the boxed futures would live as long as the
+            actor and context. Making it impossible to mutably borrow them again from
+            this point forward.
 
-            futures transmuted to static lifetime in ContextWithActor.cache_ref must resolved
-            before next ContextWithActor.cache_mut get polled
+            future transmute to static lifetime must be polled before next
+            ContextWithActor.cache_mut is polled.
         */
-
-        let act: &'static A = unsafe { core::mem::transmute(act) };
-        let ctx: &'static Context<A> = unsafe { core::mem::transmute(ctx) };
+        let act = unsafe { transmute::<_, &'static A>(act) };
+        let ctx = unsafe { transmute::<_, &'static Context<A>>(ctx) };
 
         let fut = act.handle(msg, ctx);
 
@@ -180,16 +181,16 @@ where
 
         /*
             SAFETY:
-            `MessageHandler::handle_wait`can not tie to actor and context's lifetime. The reason is
-            it would assume the boxed futures would live as long as the actor and context. Making it
-            impossible to mutably borrow them again from this point forward.
+            `MessageHandler::handle_wait`can not tie to actor and context's lifetime.
+            The reason is it would assume the boxed futures would live as long as the
+            actor and context. Making it impossible to mutably borrow them again from
+            this point forward.
 
-            future transmute to static lifetime must be polled only when ContextWithActor.cache_ref
-            is empty.
+            future transmute to static lifetime must be polled only when
+            ContextWithActor.cache_ref is empty.
         */
-
-        let act: &'static mut A = unsafe { core::mem::transmute(act) };
-        let ctx: &'static mut Context<A> = unsafe { core::mem::transmute(ctx) };
+        let act = unsafe { transmute::<_, &'static mut A>(act) };
+        let ctx = unsafe { transmute::<_, &'static mut Context<A>>(ctx) };
 
         let fut = act.handle_wait(msg, ctx);
 

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use actix_async::actor;
 use actix_async::prelude::*;
+use actix_rt::time::sleep;
 use futures_util::FutureExt;
 
 /*
@@ -17,13 +17,13 @@ actor!(ClosureActor);
 // impl methods that take in self and/or actor's context.
 impl ClosureActor {
     async fn mutate_state(&mut self) -> usize {
-        actix_rt::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
         self.0 += 1;
         self.0
     }
 
     async fn access_context(&self, ctx: &Context<Self>) -> usize {
-        actix_rt::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
         ctx.stop();
         self.0 + 1
     }

@@ -3,8 +3,6 @@ use core::pin::Pin;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
 
-use pin_project_lite::pin_project;
-
 use crate::actor::Actor;
 use crate::error::ActixAsyncError;
 use crate::message::ActorMessage;
@@ -23,7 +21,7 @@ pub type MessageRequest<'a, A, R> =
 pub type BoxedMessageRequest<'a, RT, R> =
     _MessageRequest<RT, LocalBoxFuture<'a, Result<(), ActixAsyncError>>, R>;
 
-pin_project! {
+pin_project_lite::pin_project! {
     #[project = MessageRequestProj]
     pub enum _MessageRequest<RT, Fut, R>
     where

@@ -13,6 +13,23 @@ use crate::util::channel::{OneshotReceiver, OneshotSender};
 use crate::util::futures::Stream;
 use crate::util::smart_pointer::RefCounter;
 
+/// trait define types goes through actor's `Addr` to it's `Handler`
+///
+/// # example:
+/// ```rust
+/// use actix_async::prelude::*;
+///
+/// struct MyMsg;
+///
+/// impl Message for MyMsg {
+///     // define what type would be the response for MyMsg.
+///     type Result = u32;
+/// }
+///
+/// struct MyMsg2;
+/// // a short cut macro would do the same thing as above.
+/// message!(MyMsg2, u32);
+/// ```
 pub trait Message: 'static {
     type Result: Send + 'static;
 }
@@ -104,8 +121,8 @@ impl<M: Message> MessageContainer<M> {
     SAFETY:
     Message container is construct from either `Context` or `Addr`.
 
-    *. When it's constructed through `Addr`. The caller must make sure the `Message` type passed
-       to it is `Send` bound as the object would possibly sent to another thread.
+    *. When it's constructed through `Addr`. The caller must make sure the `Message` type
+       passed to it is `Send` bound as the object would possibly sent to another thread.
     *. When it's constructed through `Context`. The container remain on it's thread and never
        move to other threads so it's safe to bound to `Send` regardless.
 */
@@ -123,8 +140,8 @@ pub(crate) enum ActorMessageClone<A> {
 impl<A: Actor> ActorMessageClone<A> {
     pub(crate) fn clone(&self) -> ActorMessage<A> {
         match self {
-            Self::Ref(ref obj) => ActorMessage::Ref(obj.clone_object()),
-            Self::Mut(ref obj) => ActorMessage::Mut(obj.clone_object()),
+            Self::Ref(obj) => ActorMessage::Ref(obj.clone_object()),
+            Self::Mut(obj) => ActorMessage::Mut(obj.clone_object()),
         }
     }
 }
@@ -266,18 +283,18 @@ pin_project_lite::pin_project! {
         #[pin]
         stream: S,
         handle: Option<OneshotReceiver<()>>,
+        to_msg: F,
         _act: PhantomData<A>,
-        f: F
     }
 }
 
 impl<A, S, F> StreamContainer<A, S, F> {
-    pub(crate) fn new(stream: S, handle: OneshotReceiver<()>, f: F) -> Self {
+    pub(crate) fn new(stream: S, handle: OneshotReceiver<()>, to_msg: F) -> Self {
         Self {
             stream,
             handle: Some(handle),
+            to_msg,
             _act: PhantomData,
-            f,
         }
     }
 }
@@ -306,7 +323,7 @@ where
 
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(item)) => {
-                let msg = (this.f)(item);
+                let msg = (this.to_msg)(item);
                 Poll::Ready(Some(msg))
             }
             Poll::Ready(None) => Poll::Ready(None),

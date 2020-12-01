@@ -1,7 +1,9 @@
 use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::marker::PhantomData;
+use core::mem::{swap, transmute};
 use core::pin::Pin;
+use core::ptr::read;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
 
@@ -226,6 +228,10 @@ impl<A: Actor> Context<A> {
     fn is_running(&self) -> bool {
         self.state.get() == ActorState::Running
     }
+
+    fn set_running(&self) {
+        self.state.set(ActorState::Running);
+    }
 }
 
 type Task = LocalBoxFuture<'static, ()>;
@@ -243,7 +249,7 @@ impl<A: Actor> CacheRef<A> {
         let mut i = 0;
         while i < self.0.len() {
             match self.0[i].as_mut().poll(cx) {
-                Poll::Ready(_) => {
+                Poll::Ready(()) => {
                     // SAFETY:
                     // Vec::swap_remove with no len check and drop of removed element in place.
                     // i is guaranteed to be smaller than this.cache_ref.len()
@@ -345,10 +351,10 @@ impl<A: Actor> ContextWithActor<A> {
         }
     }
 
-    fn new_running(act: Option<A>, ctx: Option<Context<A>>) -> Self {
+    fn new_running(act: &mut Option<A>, ctx: &mut Option<Context<A>>) -> Self {
         Self::Running {
-            act,
-            ctx,
+            act: act.take(),
+            ctx: ctx.take(),
             cache_ref: CacheRef::new(),
             cache_mut: CacheMut::new(),
             future_cache: Vec::with_capacity(8),
@@ -404,12 +410,9 @@ impl<A: Actor> Future for ContextWithActor<A> {
                 Some(fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(_) => {
                         *on_start = None;
-                        let mut ctx = ctx.take();
-                        let act = act.take();
-
-                        ctx.as_mut().unwrap().state.set(ActorState::Running);
-                        self.as_mut().set(ContextWithActor::new_running(act, ctx));
-
+                        ctx.as_mut().unwrap().set_running();
+                        let state = ContextWithActor::new_running(act, ctx);
+                        self.set(state);
                         self.poll(cx)
                     }
                     Poll::Pending => Poll::Pending,
@@ -419,11 +422,10 @@ impl<A: Actor> Future for ContextWithActor<A> {
                     let ctx = ctx.as_mut().unwrap();
 
                     // SAFETY:
-                    //
                     // Self reference is needed.
-                    // on_start transmute to static lifetime must be resolved before dropping or
-                    // move Context and Actor.
-                    let fut = unsafe { core::mem::transmute(act.on_start(ctx)) };
+                    // on_start transmute to static lifetime must be resolved before dropping
+                    // or move Context and Actor.
+                    let fut = unsafe { transmute(act.on_start(ctx)) };
                     *on_start = Some(fut);
 
                     self.poll(cx)
@@ -469,8 +471,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                         match Pin::new(&mut future_cache[i]).poll(cx) {
                             Poll::Ready(msg) => {
                                 // SAFETY:
-                                // Vec::swap_remove with no len check and drop of removed element
-                                // in place.
+                                // Vec::swap_remove with no len check and drop of removed
+                                // element in place.
                                 // i is guaranteed to be smaller than delay_cache.len()
                                 unsafe {
                                     future_cache.swap_remove_uncheck(i);
@@ -513,8 +515,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                             // stream message is either canceled by ContextJoinHandle or finished.
                             Poll::Ready(None) => {
                                 // SAFETY:
-                                // Vec::swap_remove with no len check and drop of removed element
-                                // in place.
+                                // Vec::swap_remove with no len check and drop of removed
+                                // element in place.
                                 // i is guaranteed to be smaller than interval_cache.len()
                                 unsafe {
                                     stream_cache.swap_remove_uncheck(i);
@@ -533,8 +535,8 @@ impl<A: Actor> Future for ContextWithActor<A> {
                             new = true;
                             cache_ref.add_concurrent(msg, act, ctx);
                         }
-                        // new exclusive message. add it to cache_mut. No new messages should be accepted
-                        // until this one is resolved.
+                        // new exclusive message. add it to cache_mut. No new messages should
+                        // be accepted until this one is resolved.
                         Poll::Ready(Some(ActorMessage::Mut(msg))) => {
                             cache_mut.add_exclusive(msg, act, ctx);
                             return self.poll(cx);
@@ -548,7 +550,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                     ctx.as_mut().unwrap().stop();
                                     let state =
                                         ContextWithActor::new_stopping(act, ctx, drop_notify);
-                                    self.as_mut().set(state);
+                                    self.set(state);
                                     return self.poll(cx);
                                 }
                                 _ => {}
@@ -562,7 +564,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                 Poll::Pending
                             } else {
                                 let state = ContextWithActor::new_stopping(act, ctx, drop_notify);
-                                self.as_mut().set(state);
+                                self.set(state);
                                 self.poll(cx)
                             };
                         }
@@ -589,11 +591,10 @@ impl<A: Actor> Future for ContextWithActor<A> {
                 },
                 None => {
                     // SAFETY:
-                    //
                     // Self reference is needed.
-                    // on_stop transmute to static lifetime must be resolved before dropping or
-                    // move Context and Actor.
-                    let fut = unsafe { core::mem::transmute(act.on_stop(ctx)) };
+                    // on_stop transmute to static lifetime must be resolved before dropping
+                    // or move Context and Actor.
+                    let fut = unsafe { transmute(act.on_stop(ctx)) };
                     *on_stop = Some(fut);
 
                     self.poll(cx)
@@ -639,9 +640,9 @@ impl<T> SwapRemoveUncheck for Vec<T> {
     #[inline]
     unsafe fn swap_remove_uncheck(&mut self, i: usize) {
         let len = self.len();
-        let mut last = core::ptr::read(self.as_ptr().add(len - 1));
+        let mut last = read(self.as_ptr().add(len - 1));
         let hole = self.as_mut_ptr().add(i);
         self.set_len(len - 1);
-        core::mem::swap(&mut *hole, &mut last);
+        swap(&mut *hole, &mut last);
     }
 }

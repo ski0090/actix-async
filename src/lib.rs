@@ -51,8 +51,7 @@
 //! ```
 
 #![no_std]
-#![forbid(unused_imports, unused_mut)]
-#![deny(unused_variables)]
+#![forbid(unused_imports, unused_mut, unused_variables)]
 
 extern crate alloc;
 
@@ -82,6 +81,9 @@ pub mod request;
 pub mod runtime;
 #[cfg(feature = "actix-rt")]
 pub mod supervisor;
+
+#[cfg(doctest)]
+doc_comment::doctest!("../README.md");
 
 #[cfg(test)]
 mod test {
@@ -360,7 +362,7 @@ mod test {
     #[async_trait(?Send)]
     impl Handler<TestTimeoutMessage> for TestActor {
         async fn handle(&self, _: TestTimeoutMessage, _: &Context<Self>) {
-            <TestActor as Actor>::Runtime::sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(2)).await;
         }
     }
 

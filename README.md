@@ -9,19 +9,15 @@ use actix_async::prelude::*;
 
 // actor type
 struct TestActor;
-
 // impl actor trait for actor type
-impl Actor for TestActor {
-    type Runtime = ActixRuntime;
-}
+actor!(TestActor);
 
 // message type
 struct TestMessage;
-
 // impl message trait for message type.
-impl Message for TestMessage {
-    type Result = u32;
-}
+// the second argument is the result type of Message.
+// it must match the return type of Handler<Message>::handle method.
+message!(TestMessage, u32);
 
 // impl handler trait for message and actor types.
 #[async_trait::async_trait(?Send)]
@@ -46,10 +42,10 @@ async fn main() {
     let address = actor.start();
 
     // send concurrent message with address
-    let res = address.send(TestMessage).await.unwrap();
+    let res: Result<u32, ActixAsyncError> = address.send(TestMessage).await;
 
     // got result
-    assert_eq!(996, res);
+    assert_eq!(996, res.unwrap());
 
     // send exclusive message with address
     let res = address.wait(TestMessage).await.unwrap();
