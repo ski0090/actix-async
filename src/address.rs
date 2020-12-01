@@ -116,7 +116,7 @@ impl<A: Actor> Addr<A> {
 
         let (tx, rx) = oneshot();
 
-        _MessageRequest::new(self.deref().send(ActorMessage::ActorState(state, tx)), rx)
+        _MessageRequest::new(self.deref().send(ActorMessage::State(state, tx)), rx)
     }
 
     /// Weak version of Addr that can be upgraded.
@@ -191,7 +191,7 @@ impl<A: Actor> Addr<A> {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn send<A, M, F, FS, Fut>(f: F, fs: FS) -> _MessageRequest<A::Runtime, Fut, M::Result>
 where
     A: Actor + Handler<M>,
@@ -223,7 +223,7 @@ impl<A: Actor> WeakAddr<A> {
         self.0.upgrade().map(Addr)
     }
 
-    #[inline]
+    #[inline(always)]
     fn send_weak<M, F>(&self, f: F) -> BoxedMessageRequest<A::Runtime, M::Result>
     where
         A: Handler<M>,
@@ -233,7 +233,7 @@ impl<A: Actor> WeakAddr<A> {
         send(f, |msg| Box::pin(self._send_weak(msg)) as _)
     }
 
-    #[inline]
+    #[inline(always)]
     async fn _send_weak(&self, msg: ActorMessage<A>) -> Result<(), ActixAsyncError> {
         self.upgrade()
             .ok_or(ActixAsyncError::Closed)?

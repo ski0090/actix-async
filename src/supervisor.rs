@@ -9,7 +9,7 @@ use actix_rt::Arbiter;
 
 use crate::actor::Actor;
 use crate::address::Addr;
-use crate::context::{Context, ContextWithActor};
+use crate::context::{Context, ContextFuture};
 use crate::util::channel::channel;
 use crate::util::smart_pointer::RefCounter;
 
@@ -141,10 +141,10 @@ impl Supervisor {
                 A::spawn(async move {
                     let mut ctx = Context::new(rx);
 
-                    let actor = f(&mut ctx).await;
+                    let act = f(&mut ctx).await;
 
                     SupervisorFut {
-                        fut: Some(ContextWithActor::new_starting(actor, ctx)),
+                        fut: Some(ContextFuture::new(act, ctx)),
                     }
                     .await;
                 });
@@ -156,7 +156,7 @@ impl Supervisor {
 }
 
 struct SupervisorFut<A: Actor> {
-    fut: Option<ContextWithActor<A>>,
+    fut: Option<ContextFuture<A>>,
 }
 
 impl<A: Actor> Default for SupervisorFut<A> {
@@ -190,29 +190,15 @@ impl<A: Actor> Future for SupervisorFut<A> {
     }
 }
 
-impl<A: Actor> ContextWithActor<A> {
+impl<A: Actor> ContextFuture<A> {
     pub(crate) fn is_running(&self) -> bool {
-        match self {
-            ContextWithActor::Starting { ctx, .. } => {
-                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
-            }
-            ContextWithActor::Running { ctx, .. } => {
-                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
-            }
-            ContextWithActor::Stopping { ctx, .. } => ctx.is_running(),
-        }
+        self.ctx.is_running()
     }
 
+    #[cold]
     fn clear_cache(&mut self) {
-        if let ContextWithActor::Running {
-            cache_ref,
-            cache_mut,
-            ..
-        } = self
-        {
-            cache_mut.clear();
-            cache_ref.0.clear();
-        }
+        self.cache_mut.clear();
+        self.cache_ref.0.clear();
     }
 }
 

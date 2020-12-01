@@ -227,6 +227,7 @@ impl<A: Actor> Stream for IntervalMessage<A> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+
         if let Some(h) = this.handle.as_mut() {
             match Pin::new(h).poll(cx) {
                 // handle canceled. resolve with nothing.
@@ -336,7 +337,7 @@ where
 pub enum ActorMessage<A> {
     Ref(Box<dyn MessageHandler<A> + Send>),
     Mut(Box<dyn MessageHandler<A> + Send>),
-    ActorState(ActorState, OneshotSender<()>),
+    State(ActorState, OneshotSender<()>),
 }
 
 impl<A> ActorMessage<A> {

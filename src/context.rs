@@ -243,7 +243,7 @@ impl<A: Actor> CacheRef<A> {
         Self(Vec::with_capacity(A::size_hint()), PhantomData)
     }
 
-    #[inline]
+    #[inline(always)]
     fn poll_unpin(&mut self, cx: &mut StdContext<'_>) {
         // poll concurrent messages
         let mut i = 0;
@@ -262,314 +262,313 @@ impl<A: Actor> CacheRef<A> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    #[inline]
-    fn add_concurrent(
-        &mut self,
-        mut msg: Box<dyn MessageHandler<A>>,
-        act: &Option<A>,
-        ctx: &Option<Context<A>>,
-    ) {
-        self.0
-            .push(msg.handle(act.as_ref().unwrap(), ctx.as_ref().unwrap()));
+    #[inline(always)]
+    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: &Context<A>) {
+        self.0.push(msg.handle(act, ctx));
     }
 }
 
 pub(crate) struct CacheMut(Option<Task>);
 
 impl CacheMut {
+    #[inline(always)]
     fn new() -> Self {
         Self(None)
     }
 
-    #[inline]
+    #[inline(always)]
     fn get_mut(&mut self) -> Option<&mut Task> {
         self.0.as_mut()
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn clear(&mut self) {
         self.0 = None;
     }
 
-    #[inline]
+    #[inline(always)]
     fn add_exclusive<A: Actor>(
         &mut self,
         mut msg: Box<dyn MessageHandler<A>>,
-        act: &mut Option<A>,
-        ctx: &mut Option<Context<A>>,
+        act: &mut A,
+        ctx: &mut Context<A>,
     ) {
-        self.0 = Some(msg.handle_wait(act.as_mut().unwrap(), ctx.as_mut().unwrap()));
+        self.0 = Some(msg.handle_wait(act, ctx));
     }
 
-    #[inline]
+    #[inline(always)]
     fn is_some(&self) -> bool {
         self.0.is_some()
     }
 }
 
-pin_project_lite::pin_project! {
-    #[project = ContextProj]
-    pub(crate) enum ContextWithActor<A: Actor> {
-        Starting {
-            act: Option<A>,
-            ctx: Option<Context<A>>,
-            on_start: Option<Task>,
-        },
-        Running {
-            act: Option<A>,
-            ctx: Option<Context<A>>,
-            cache_mut: CacheMut,
-            cache_ref: CacheRef<A>,
-            future_cache: Vec<FutureMessage<A>>,
-            stream_cache: Vec<StreamMessage<A>>,
-            drop_notify: Option<OneshotSender<()>>,
-        },
-        Stopping {
-            act: A,
-            ctx: Context<A>,
-            on_stop: Option<Task>,
-            drop_notify: Option<OneshotSender<()>>,
-        },
+pub(crate) struct ContextFuture<A: Actor> {
+    act: A,
+    pub(crate) ctx: Context<A>,
+    pub(crate) cache_mut: CacheMut,
+    pub(crate) cache_ref: CacheRef<A>,
+    future_cache: Vec<FutureMessage<A>>,
+    stream_cache: Vec<StreamMessage<A>>,
+    drop_notify: Option<OneshotSender<()>>,
+    state: ContextState,
+    task: Option<Task>,
+}
+
+enum ContextState {
+    Starting,
+    Running,
+    Stopping,
+}
+
+impl<A: Actor> Unpin for ContextFuture<A> {}
+
+impl<A: Actor> Drop for ContextFuture<A> {
+    fn drop(&mut self) {
+        if let Some(tx) = self.drop_notify.take() {
+            let _ = tx.send(());
+        }
     }
 }
 
-impl<A: Actor> ContextWithActor<A> {
-    pub(crate) fn new_starting(act: A, ctx: Context<A>) -> Self {
-        Self::Starting {
-            ctx: Some(ctx),
-            act: Some(act),
-            on_start: None,
-        }
-    }
-
-    fn new_running(act: &mut Option<A>, ctx: &mut Option<Context<A>>) -> Self {
-        Self::Running {
-            act: act.take(),
-            ctx: ctx.take(),
-            cache_ref: CacheRef::new(),
+impl<A: Actor> ContextFuture<A> {
+    #[inline(always)]
+    pub(crate) fn new(act: A, ctx: Context<A>) -> Self {
+        Self {
+            act,
+            ctx,
             cache_mut: CacheMut::new(),
+            cache_ref: CacheRef::new(),
             future_cache: Vec::with_capacity(8),
             stream_cache: Vec::with_capacity(8),
             drop_notify: None,
+            state: ContextState::Starting,
+            task: None,
         }
     }
 
-    fn new_stopping(
-        act: &mut Option<A>,
-        ctx: &mut Option<Context<A>>,
-        drop_notify: &mut Option<OneshotSender<()>>,
-    ) -> Self {
-        Self::Stopping {
-            act: act.take().unwrap(),
-            ctx: ctx.take().unwrap(),
-            on_stop: None,
-            drop_notify: drop_notify.take(),
+    #[inline(always)]
+    fn merge(&mut self) {
+        let ctx = &mut self.ctx;
+        self.future_cache.merge(ctx);
+        self.stream_cache.merge(ctx);
+    }
+
+    #[inline(always)]
+    fn add_exclusive(&mut self, msg: Box<dyn MessageHandler<A>>) {
+        self.cache_mut
+            .add_exclusive(msg, &mut self.act, &mut self.ctx);
+    }
+
+    #[inline(always)]
+    fn add_concurrent(&mut self, msg: Box<dyn MessageHandler<A>>) {
+        self.cache_ref.add_concurrent(msg, &self.act, &self.ctx);
+    }
+
+    #[inline(always)]
+    fn have_cache(&self) -> bool {
+        !self.cache_ref.is_empty() || self.cache_mut.is_some()
+    }
+
+    #[inline(always)]
+    fn poll_running(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
+        let this = self.as_mut().get_mut();
+
+        // poll concurrent messages
+        this.cache_ref.poll_unpin(cx);
+
+        // try to poll exclusive message.
+        match this.cache_mut.get_mut() {
+            // still have concurrent messages. finish them.
+            Some(_) if !this.cache_ref.is_empty() => return Poll::Pending,
+            // poll exclusive message and remove it when success.
+            Some(fut_mut) => match fut_mut.as_mut().poll(cx) {
+                Poll::Ready(_) => this.cache_mut.clear(),
+                Poll::Pending => return Poll::Pending,
+            },
+            None => {}
+        }
+
+        // flag indicate if return pending or poll an extra round.
+        let mut new = false;
+
+        // If context is stopped we stop dealing with future and stream messages.
+        if this.ctx.is_running() {
+            this.merge();
+
+            // poll future messages
+            let mut i = 0;
+            while i < this.future_cache.len() {
+                match Pin::new(&mut this.future_cache[i]).poll(cx) {
+                    Poll::Ready(msg) => {
+                        // SAFETY:
+                        // Vec::swap_remove with no len check and drop of removed
+                        // element in place.
+                        // i is guaranteed to be smaller than future_cache.len()
+                        unsafe {
+                            this.future_cache.swap_remove_uncheck(i);
+                        }
+
+                        match msg {
+                            Some(ActorMessage::Ref(msg)) => {
+                                new = true;
+                                this.add_concurrent(msg);
+                            }
+                            Some(ActorMessage::Mut(msg)) => {
+                                this.add_exclusive(msg);
+                                return self.poll_running(cx);
+                            }
+                            // Message is canceled by ContextJoinHandle. Ignore it.
+                            None => {}
+                            _ => unreachable!(),
+                        }
+                    }
+                    Poll::Pending => i += 1,
+                }
+            }
+
+            // poll stream message.
+            let mut i = 0;
+            while i < this.stream_cache.len() {
+                match Pin::new(&mut this.stream_cache[i]).poll_next(cx) {
+                    Poll::Ready(Some(ActorMessage::Ref(msg))) => {
+                        new = true;
+                        this.add_concurrent(msg);
+                    }
+                    Poll::Ready(Some(ActorMessage::Mut(msg))) => {
+                        this.add_exclusive(msg);
+                        return self.poll_running(cx);
+                    }
+                    // stream is either canceled by ContextJoinHandle or finished.
+                    Poll::Ready(None) => {
+                        // SAFETY:
+                        // Vec::swap_remove with no len check and drop of removed
+                        // element in place.
+                        // i is guaranteed to be smaller than stream_cache.len()
+                        unsafe {
+                            this.stream_cache.swap_remove_uncheck(i);
+                        }
+                    }
+                    Poll::Pending => i += 1,
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        // actively drain receiver channel for incoming messages.
+        loop {
+            match Pin::new(&mut this.ctx.rx).poll_next(cx) {
+                // new concurrent message. add it to cache_ref and continue.
+                Poll::Ready(Some(ActorMessage::Ref(msg))) => {
+                    new = true;
+                    this.add_concurrent(msg);
+                }
+                // new exclusive message. add it to cache_mut. No new messages should
+                // be accepted until this one is resolved.
+                Poll::Ready(Some(ActorMessage::Mut(msg))) => {
+                    this.add_exclusive(msg);
+                    return self.poll_running(cx);
+                }
+                // stopping messages received.
+                Poll::Ready(Some(ActorMessage::State(state, notify))) => {
+                    // a oneshot sender to to notify the caller shut down is complete.
+                    this.drop_notify = Some(notify);
+                    // stop context which would close the channel.
+                    this.ctx.stop();
+                    // goes to stopping state if it's a force shut down.
+                    // otherwise keep the loop until we drain the channel.
+                    if let ActorState::Stop = state {
+                        this.state = ContextState::Stopping;
+                        return self.poll_close(cx);
+                    }
+                }
+                // channel is closed
+                Poll::Ready(None) => {
+                    // stop context just in case.
+                    this.ctx.stop();
+                    // have new concurrent message. poll another round.
+                    return if new {
+                        self.poll_running(cx)
+                        // wait for unfinished messages to resolve.
+                    } else if this.have_cache() {
+                        Poll::Pending
+                    } else {
+                        // goes to stopping state.
+                        this.state = ContextState::Stopping;
+                        self.poll_close(cx)
+                    };
+                }
+                // if there are new concurrent messages then run an extra poll.
+                Poll::Pending => {
+                    return if new {
+                        self.poll_running(cx)
+                    } else {
+                        Poll::Pending
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
+        let this = self.as_mut().get_mut();
+        match this.task.as_mut() {
+            Some(fut) => match fut.as_mut().poll(cx) {
+                Poll::Ready(_) => {
+                    this.task = None;
+                    this.ctx.set_running();
+                    this.state = ContextState::Running;
+                    self.poll(cx)
+                }
+                Poll::Pending => Poll::Pending,
+            },
+            None => {
+                // SAFETY:
+                // Self reference is needed.
+                // on_start transmute to static lifetime must be resolved before dropping
+                // or move Context and Actor.
+                let fut = unsafe { transmute(this.act.on_start(&mut this.ctx)) };
+                this.task = Some(fut);
+                self.poll_start(cx)
+            }
+        }
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
+        let this = self.as_mut().get_mut();
+        match this.task.as_mut() {
+            Some(fut) => match fut.as_mut().poll(cx) {
+                Poll::Ready(_) => {
+                    this.task = None;
+                    Poll::Ready(())
+                }
+                Poll::Pending => Poll::Pending,
+            },
+            None => {
+                // SAFETY:
+                // Self reference is needed.
+                // on_stop transmute to static lifetime must be resolved before dropping
+                // or move Context and Actor.
+                let fut = unsafe { transmute(this.act.on_stop(&mut this.ctx)) };
+                this.task = Some(fut);
+                self.poll_close(cx)
+            }
         }
     }
 }
 
-impl<A: Actor> Future for ContextWithActor<A> {
+impl<A: Actor> Future for ContextFuture<A> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        match self.as_mut().project() {
-            ContextProj::Starting { act, ctx, on_start } => match on_start {
-                Some(fut) => match fut.as_mut().poll(cx) {
-                    Poll::Ready(_) => {
-                        *on_start = None;
-                        ctx.as_mut().unwrap().set_running();
-                        let state = ContextWithActor::new_running(act, ctx);
-                        self.set(state);
-                        self.poll(cx)
-                    }
-                    Poll::Pending => Poll::Pending,
-                },
-                None => {
-                    let act = act.as_mut().unwrap();
-                    let ctx = ctx.as_mut().unwrap();
-
-                    // SAFETY:
-                    // Self reference is needed.
-                    // on_start transmute to static lifetime must be resolved before dropping
-                    // or move Context and Actor.
-                    let fut = unsafe { transmute(act.on_start(ctx)) };
-                    *on_start = Some(fut);
-
-                    self.poll(cx)
-                }
-            },
-            ContextProj::Running {
-                cache_ref,
-                cache_mut,
-                future_cache,
-                stream_cache,
-                act,
-                ctx,
-                drop_notify,
-            } => {
-                cache_ref.poll_unpin(cx);
-
-                // try to poll exclusive message.
-                match cache_mut.get_mut() {
-                    // still have concurrent messages. finish them.
-                    Some(_) if !cache_ref.is_empty() => return Poll::Pending,
-                    // poll exclusive message and remove it when success.
-                    Some(fut_mut) => match fut_mut.as_mut().poll(cx) {
-                        Poll::Ready(_) => cache_mut.clear(),
-                        Poll::Pending => return Poll::Pending,
-                    },
-                    None => {}
-                }
-
-                // flag indicate if return pending or poll an extra round.
-                let mut new = false;
-
-                // If context is stopped we stop dealing with delay and interval messages.
-                if ctx.as_ref().unwrap().is_running() {
-                    {
-                        let ctx = ctx.as_mut().unwrap();
-                        future_cache.merge(ctx);
-                        stream_cache.merge(ctx);
-                    }
-
-                    // poll delay messages
-                    let mut i = 0;
-                    while i < future_cache.len() {
-                        match Pin::new(&mut future_cache[i]).poll(cx) {
-                            Poll::Ready(msg) => {
-                                // SAFETY:
-                                // Vec::swap_remove with no len check and drop of removed
-                                // element in place.
-                                // i is guaranteed to be smaller than delay_cache.len()
-                                unsafe {
-                                    future_cache.swap_remove_uncheck(i);
-                                }
-
-                                // msg.is_none() means it's canceled by ContextJoinHandle.
-                                if let Some(msg) = msg {
-                                    match msg {
-                                        ActorMessage::Ref(msg) => {
-                                            new = true;
-                                            cache_ref.add_concurrent(msg, act, ctx);
-                                        }
-                                        ActorMessage::Mut(msg) => {
-                                            cache_mut.add_exclusive(msg, act, ctx);
-                                            return self.poll(cx);
-                                        }
-                                        _ => unreachable!(),
-                                    }
-                                }
-                            }
-                            Poll::Pending => i += 1,
-                        }
-                    }
-
-                    // poll stream message.
-                    let mut i = 0;
-                    while i < stream_cache.len() {
-                        match Pin::new(&mut stream_cache[i]).poll_next(cx) {
-                            Poll::Ready(Some(ActorMessage::Ref(msg))) => {
-                                new = true;
-                                cache_ref.add_concurrent(msg, act, ctx);
-                            }
-                            Poll::Ready(Some(ActorMessage::Mut(msg))) => {
-                                cache_mut.add_exclusive(msg, act, ctx);
-                                return self.poll(cx);
-                            }
-                            // stream message is either canceled by ContextJoinHandle or finished.
-                            Poll::Ready(None) => {
-                                // SAFETY:
-                                // Vec::swap_remove with no len check and drop of removed
-                                // element in place.
-                                // i is guaranteed to be smaller than interval_cache.len()
-                                unsafe {
-                                    stream_cache.swap_remove_uncheck(i);
-                                }
-                            }
-                            Poll::Pending => i += 1,
-                            _ => unreachable!(),
-                        }
-                    }
-                }
-
-                // actively drain receiver channel for incoming messages.
-                loop {
-                    match Pin::new(&mut ctx.as_mut().unwrap().rx).poll_next(cx) {
-                        // new concurrent message. add it to cache_ref and continue.
-                        Poll::Ready(Some(ActorMessage::Ref(msg))) => {
-                            new = true;
-                            cache_ref.add_concurrent(msg, act, ctx);
-                        }
-                        // new exclusive message. add it to cache_mut. No new messages should
-                        // be accepted until this one is resolved.
-                        Poll::Ready(Some(ActorMessage::Mut(msg))) => {
-                            cache_mut.add_exclusive(msg, act, ctx);
-                            return self.poll(cx);
-                        }
-                        Poll::Ready(Some(ActorMessage::ActorState(state, notify))) => {
-                            *drop_notify = Some(notify);
-
-                            match state {
-                                ActorState::StopGraceful => ctx.as_mut().unwrap().stop(),
-                                ActorState::Stop => {
-                                    ctx.as_mut().unwrap().stop();
-                                    let state =
-                                        ContextWithActor::new_stopping(act, ctx, drop_notify);
-                                    self.set(state);
-                                    return self.poll(cx);
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        Poll::Ready(None) => {
-                            ctx.as_mut().unwrap().stop();
-                            return if new {
-                                self.poll(cx)
-                            } else if !cache_ref.is_empty() || cache_mut.is_some() {
-                                Poll::Pending
-                            } else {
-                                let state = ContextWithActor::new_stopping(act, ctx, drop_notify);
-                                self.set(state);
-                                self.poll(cx)
-                            };
-                        }
-                        // if we have new concurrent messages then run an extra poll.
-                        Poll::Pending => return if new { self.poll(cx) } else { Poll::Pending },
-                    }
-                }
-            }
-            ContextProj::Stopping {
-                act,
-                ctx,
-                on_stop,
-                drop_notify,
-            } => match on_stop {
-                Some(ref mut fut) => match fut.as_mut().poll(cx) {
-                    Poll::Ready(_) => {
-                        *on_stop = None;
-                        if let Some(tx) = drop_notify.take() {
-                            let _ = tx.send(());
-                        }
-                        Poll::Ready(())
-                    }
-                    Poll::Pending => Poll::Pending,
-                },
-                None => {
-                    // SAFETY:
-                    // Self reference is needed.
-                    // on_stop transmute to static lifetime must be resolved before dropping
-                    // or move Context and Actor.
-                    let fut = unsafe { transmute(act.on_stop(ctx)) };
-                    *on_stop = Some(fut);
-
-                    self.poll(cx)
-                }
-            },
+        match self.as_mut().get_mut().state {
+            ContextState::Running => self.poll_running(cx),
+            ContextState::Starting => self.poll_start(cx),
+            ContextState::Stopping => self.poll_close(cx),
         }
     }
 }
@@ -580,7 +579,7 @@ trait MergeContext<A: Actor> {
 }
 
 impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
-    #[inline]
+    #[inline(always)]
     fn merge(&mut self, ctx: &mut Context<A>) {
         let stream = ctx.stream_message.get_mut();
         while let Some(stream) = stream.pop() {
@@ -590,7 +589,7 @@ impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
 }
 
 impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
-    #[inline]
+    #[inline(always)]
     fn merge(&mut self, ctx: &mut Context<A>) {
         let future = ctx.future_message.get_mut();
         while let Some(future) = future.pop() {
@@ -607,7 +606,7 @@ trait SwapRemoveUncheck {
 }
 
 impl<T> SwapRemoveUncheck for Vec<T> {
-    #[inline]
+    #[inline(always)]
     unsafe fn swap_remove_uncheck(&mut self, i: usize) {
         let len = self.len();
         let mut last = read(self.as_ptr().add(len - 1));

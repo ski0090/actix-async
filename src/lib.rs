@@ -119,7 +119,8 @@ mod test {
     async fn stop_graceful() {
         let addr = TestActor::default().start();
 
-        let _ = addr.stop(true).await;
+        let res = addr.stop(true).await;
+        assert!(res.is_ok());
         assert!(addr.send(TestMessage).await.is_err());
     }
 
@@ -200,11 +201,11 @@ mod test {
         let res = addr.send(TestDelayMessage).await.unwrap();
         drop(res);
 
-        sleep(Duration::from_millis(400)).await;
+        sleep(Duration::from_millis(300)).await;
         let res = addr.send(TestMessage).await.unwrap();
         assert_eq!(996, res);
 
-        sleep(Duration::from_millis(200)).await;
+        sleep(Duration::from_millis(300)).await;
         let res = addr.send(TestMessage).await.unwrap();
         assert_eq!(997, res);
 

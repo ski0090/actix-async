@@ -4,7 +4,7 @@ use core::time::Duration;
 use alloc::boxed::Box;
 
 use crate::address::Addr;
-use crate::context::{Context, ContextWithActor};
+use crate::context::{Context, ContextFuture};
 use crate::message::ActorMessage;
 use crate::runtime::RuntimeService;
 use crate::util::channel::{channel, Receiver};
@@ -173,7 +173,7 @@ pub trait Actor: Sized + 'static {
 
             let actor = f(&mut ctx).await;
 
-            ContextWithActor::new_starting(actor, ctx).await;
+            ContextFuture::new(actor, ctx).await;
         });
     }
 }
