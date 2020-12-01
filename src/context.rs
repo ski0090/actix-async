@@ -316,7 +316,8 @@ pub(crate) struct ContextFuture<A: Actor> {
     stream_cache: Vec<StreamMessage<A>>,
     drop_notify: Option<OneshotSender<()>>,
     state: ContextState,
-    task: Option<Task>,
+    poll_task: Option<Task>,
+    extra_poll: bool,
 }
 
 enum ContextState {
@@ -347,7 +348,8 @@ impl<A: Actor> ContextFuture<A> {
             stream_cache: Vec::with_capacity(8),
             drop_notify: None,
             state: ContextState::Starting,
-            task: None,
+            poll_task: None,
+            extra_poll: false,
         }
     }
 
@@ -366,6 +368,8 @@ impl<A: Actor> ContextFuture<A> {
 
     #[inline(always)]
     fn add_concurrent(&mut self, msg: Box<dyn MessageHandler<A>>) {
+        // when adding new concurrent message we always want an extra poll to register them.
+        self.extra_poll = true;
         self.cache_ref.add_concurrent(msg, &self.act, &self.ctx);
     }
 
@@ -393,8 +397,8 @@ impl<A: Actor> ContextFuture<A> {
             None => {}
         }
 
-        // flag indicate if return pending or poll an extra round.
-        let mut new = false;
+        // reset extra_poll
+        this.extra_poll = false;
 
         // If context is stopped we stop dealing with future and stream messages.
         if this.ctx.is_running() {
@@ -415,7 +419,6 @@ impl<A: Actor> ContextFuture<A> {
 
                         match msg {
                             Some(ActorMessage::Ref(msg)) => {
-                                new = true;
                                 this.add_concurrent(msg);
                             }
                             Some(ActorMessage::Mut(msg)) => {
@@ -436,7 +439,6 @@ impl<A: Actor> ContextFuture<A> {
             while i < this.stream_cache.len() {
                 match Pin::new(&mut this.stream_cache[i]).poll_next(cx) {
                     Poll::Ready(Some(ActorMessage::Ref(msg))) => {
-                        new = true;
                         this.add_concurrent(msg);
                     }
                     Poll::Ready(Some(ActorMessage::Mut(msg))) => {
@@ -464,7 +466,6 @@ impl<A: Actor> ContextFuture<A> {
             match Pin::new(&mut this.ctx.rx).poll_next(cx) {
                 // new concurrent message. add it to cache_ref and continue.
                 Poll::Ready(Some(ActorMessage::Ref(msg))) => {
-                    new = true;
                     this.add_concurrent(msg);
                 }
                 // new exclusive message. add it to cache_mut. No new messages should
@@ -491,9 +492,9 @@ impl<A: Actor> ContextFuture<A> {
                     // stop context just in case.
                     this.ctx.stop();
                     // have new concurrent message. poll another round.
-                    return if new {
+                    return if this.extra_poll {
                         self.poll_running(cx)
-                        // wait for unfinished messages to resolve.
+                    // wait for unfinished messages to resolve.
                     } else if this.have_cache() {
                         Poll::Pending
                     } else {
@@ -502,13 +503,13 @@ impl<A: Actor> ContextFuture<A> {
                         self.poll_close(cx)
                     };
                 }
-                // if there are new concurrent messages then run an extra poll.
                 Poll::Pending => {
-                    return if new {
+                    // have new concurrent message. poll another round.
+                    return if this.extra_poll {
                         self.poll_running(cx)
                     } else {
                         Poll::Pending
-                    }
+                    };
                 }
             }
         }
@@ -516,13 +517,13 @@ impl<A: Actor> ContextFuture<A> {
 
     fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
-        match this.task.as_mut() {
-            Some(fut) => match fut.as_mut().poll(cx) {
+        match this.poll_task.as_mut() {
+            Some(task) => match task.as_mut().poll(cx) {
                 Poll::Ready(_) => {
-                    this.task = None;
+                    this.poll_task = None;
                     this.ctx.set_running();
                     this.state = ContextState::Running;
-                    self.poll(cx)
+                    self.poll_running(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
@@ -531,8 +532,8 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_start transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let fut = unsafe { transmute(this.act.on_start(&mut this.ctx)) };
-                this.task = Some(fut);
+                let task = unsafe { transmute(this.act.on_start(&mut this.ctx)) };
+                this.poll_task = Some(task);
                 self.poll_start(cx)
             }
         }
@@ -540,10 +541,10 @@ impl<A: Actor> ContextFuture<A> {
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
-        match this.task.as_mut() {
-            Some(fut) => match fut.as_mut().poll(cx) {
+        match this.poll_task.as_mut() {
+            Some(task) => match task.as_mut().poll(cx) {
                 Poll::Ready(_) => {
-                    this.task = None;
+                    this.poll_task = None;
                     Poll::Ready(())
                 }
                 Poll::Pending => Poll::Pending,
@@ -553,8 +554,8 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_stop transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let fut = unsafe { transmute(this.act.on_stop(&mut this.ctx)) };
-                this.task = Some(fut);
+                let task = unsafe { transmute(this.act.on_stop(&mut this.ctx)) };
+                this.poll_task = Some(task);
                 self.poll_close(cx)
             }
         }
