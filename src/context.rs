@@ -225,7 +225,7 @@ impl<A: Actor> Context<A> {
         ContextJoinHandle { handle }
     }
 
-    fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.state.get() == ActorState::Running
     }
 
@@ -236,7 +236,7 @@ impl<A: Actor> Context<A> {
 
 type Task = LocalBoxFuture<'static, ()>;
 
-pub(crate) struct CacheRef<A>(Vec<Task>, PhantomData<A>);
+pub(crate) struct CacheRef<A>(pub(crate) Vec<Task>, PhantomData<A>);
 
 impl<A: Actor> CacheRef<A> {
     fn new() -> Self {
@@ -277,10 +277,6 @@ impl<A: Actor> CacheRef<A> {
         self.0
             .push(msg.handle(act.as_ref().unwrap(), ctx.as_ref().unwrap()));
     }
-
-    fn clear(&mut self) {
-        self.0.clear();
-    }
 }
 
 pub(crate) struct CacheMut(Option<Task>);
@@ -296,7 +292,7 @@ impl CacheMut {
     }
 
     #[inline]
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.0 = None;
     }
 
@@ -373,30 +369,6 @@ impl<A: Actor> ContextWithActor<A> {
             ctx: ctx.take().unwrap(),
             on_stop: None,
             drop_notify: drop_notify.take(),
-        }
-    }
-
-    pub(crate) fn is_running(&self) -> bool {
-        match self {
-            ContextWithActor::Starting { ctx, .. } => {
-                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
-            }
-            ContextWithActor::Running { ctx, .. } => {
-                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
-            }
-            ContextWithActor::Stopping { ctx, .. } => ctx.is_running(),
-        }
-    }
-
-    pub(crate) fn clear_cache(&mut self) {
-        if let ContextWithActor::Running {
-            cache_ref,
-            cache_mut,
-            ..
-        } = self
-        {
-            cache_mut.clear();
-            cache_ref.clear();
         }
     }
 }
@@ -501,17 +473,14 @@ impl<A: Actor> Future for ContextWithActor<A> {
                     let mut i = 0;
                     while i < stream_cache.len() {
                         match Pin::new(&mut stream_cache[i]).poll_next(cx) {
-                            Poll::Ready(Some(msg)) => match msg {
-                                ActorMessage::Ref(msg) => {
-                                    new = true;
-                                    cache_ref.add_concurrent(msg, act, ctx);
-                                }
-                                ActorMessage::Mut(msg) => {
-                                    cache_mut.add_exclusive(msg, act, ctx);
-                                    return self.poll(cx);
-                                }
-                                _ => unreachable!(),
-                            },
+                            Poll::Ready(Some(ActorMessage::Ref(msg))) => {
+                                new = true;
+                                cache_ref.add_concurrent(msg, act, ctx);
+                            }
+                            Poll::Ready(Some(ActorMessage::Mut(msg))) => {
+                                cache_mut.add_exclusive(msg, act, ctx);
+                                return self.poll(cx);
+                            }
                             // stream message is either canceled by ContextJoinHandle or finished.
                             Poll::Ready(None) => {
                                 // SAFETY:
@@ -523,6 +492,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                 }
                             }
                             Poll::Pending => i += 1,
+                            _ => unreachable!(),
                         }
                     }
                 }
@@ -553,7 +523,7 @@ impl<A: Actor> Future for ContextWithActor<A> {
                                     self.set(state);
                                     return self.poll(cx);
                                 }
-                                _ => {}
+                                _ => unreachable!(),
                             }
                         }
                         Poll::Ready(None) => {

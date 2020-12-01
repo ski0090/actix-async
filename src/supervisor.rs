@@ -190,6 +190,32 @@ impl<A: Actor> Future for SupervisorFut<A> {
     }
 }
 
+impl<A: Actor> ContextWithActor<A> {
+    pub(crate) fn is_running(&self) -> bool {
+        match self {
+            ContextWithActor::Starting { ctx, .. } => {
+                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
+            }
+            ContextWithActor::Running { ctx, .. } => {
+                ctx.as_ref().map(|ctx| ctx.is_running()).unwrap_or(false)
+            }
+            ContextWithActor::Stopping { ctx, .. } => ctx.is_running(),
+        }
+    }
+
+    fn clear_cache(&mut self) {
+        if let ContextWithActor::Running {
+            cache_ref,
+            cache_mut,
+            ..
+        } = self
+        {
+            cache_mut.clear();
+            cache_ref.0.clear();
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

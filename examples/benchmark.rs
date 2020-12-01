@@ -86,8 +86,6 @@ mod actix_actor {
     pub use tokio02::fs::File;
     pub use tokio02::io::AsyncReadExt;
 
-    use std::ops::DerefMut;
-
     use super::*;
 
     pub struct ActixActor {
@@ -114,10 +112,10 @@ mod actix_actor {
                 async move {
                     if heap {
                         let mut buffer = Vec::with_capacity(100_0000);
-                        let _ = f.borrow_mut().deref_mut().read(&mut buffer).await.unwrap();
+                        let _ = f.borrow_mut().read(&mut buffer).await.unwrap();
                     } else {
                         let mut buffer = [0u8; 2_048];
-                        let _ = f.borrow_mut().deref_mut().read(&mut buffer).await.unwrap();
+                        let _ = f.borrow_mut().read(&mut buffer).await.unwrap();
                     }
                 }
                 .into_actor(self),
@@ -133,12 +131,7 @@ mod actix_actor {
         type Result = ResponseActFuture<Self, ()>;
 
         fn handle(&mut self, _: ConcurrentMessage, _ctx: &mut Context<Self>) -> Self::Result {
-            Box::pin(
-                async {
-                    actix::clock::delay_for(Duration::from_millis(1)).await;
-                }
-                .into_actor(self),
-            )
+            Box::pin(actix::clock::delay_for(Duration::from_millis(1)).into_actor(self))
         }
     }
 }
