@@ -28,7 +28,7 @@ spin = "0.7.0"
 actix-rt = { git = "https://github.com/fakeshadow/actix-net.git", branch = "mio-0.7.3", optional = true }
 
 [dev-dependencies]
-actix = "0.10.0"
+actix = { git = "https://github.com/actix/actix.git", branch = "atomic-unsafe" }
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.42"
 doc-comment = "0.3.3"

@@ -30,13 +30,15 @@ pub struct ConcurrentMessage;
 mod actix_async_actor {
     pub use actix_async::prelude::*;
     pub use actix_rt::Arbiter;
+    use async_trait::async_trait;
+    pub use futures_intrusive::sync::LocalMutex;
     pub use tokio02::fs::File;
     pub use tokio02::io::AsyncReadExt;
 
     use super::*;
 
     pub struct ActixAsyncActor {
-        pub file: File,
+        pub file: LocalMutex<File>,
         pub heap_alloc: bool,
     }
 
@@ -60,20 +62,25 @@ mod actix_async_actor {
 
     message!(ExclusiveMessage, ());
 
-    #[async_trait::async_trait(?Send)]
+    #[async_trait(?Send)]
     impl Handler<ExclusiveMessage> for ActixAsyncActor {
         async fn handle(&self, _: ExclusiveMessage, _ctx: &Context<Self>) {
-            actix::clock::delay_for(Duration::from_millis(1)).await;
-        }
-
-        async fn handle_wait(&mut self, _: ExclusiveMessage, _ctx: &mut Context<Self>) {
             if self.heap_alloc {
                 let mut buffer = Vec::with_capacity(100_0000);
-                let _ = self.file.read(&mut buffer).await.unwrap();
+                let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
             } else {
                 let mut buffer = [0u8; 2_048];
-                let _ = self.file.read(&mut buffer).await.unwrap();
+                let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
             }
+        }
+    }
+
+    message!(ConcurrentMessage, ());
+
+    #[async_trait(?Send)]
+    impl Handler<ConcurrentMessage> for ActixAsyncActor {
+        async fn handle(&self, _: ConcurrentMessage, _ctx: &Context<Self>) {
+            actix::clock::delay_for(Duration::from_millis(1)).await;
         }
     }
 }
@@ -83,13 +90,14 @@ mod actix_actor {
     pub use std::rc::Rc;
 
     pub use actix::prelude::*;
+    pub use futures_intrusive::sync::LocalMutex;
     pub use tokio02::fs::File;
     pub use tokio02::io::AsyncReadExt;
 
     use super::*;
 
     pub struct ActixActor {
-        pub file: Rc<RefCell<File>>,
+        pub file: LocalMutex<File>,
         pub heap_alloc: bool,
     }
 
@@ -102,24 +110,18 @@ mod actix_actor {
     }
 
     impl Handler<ExclusiveMessage> for ActixActor {
-        type Result = AtomicResponse<Self, ()>;
+        type Result = ResponseAsync<()>;
 
-        fn handle(&mut self, _: ExclusiveMessage, _ctx: &mut Context<Self>) -> Self::Result {
-            let f = self.file.clone();
-            let heap = self.heap_alloc;
-
-            AtomicResponse::new(Box::pin(
-                async move {
-                    if heap {
-                        let mut buffer = Vec::with_capacity(100_0000);
-                        let _ = f.borrow_mut().read(&mut buffer).await.unwrap();
-                    } else {
-                        let mut buffer = [0u8; 2_048];
-                        let _ = f.borrow_mut().read(&mut buffer).await.unwrap();
-                    }
+        fn handle(&mut self, msg: ExclusiveMessage, ctx: &mut Context<Self>) -> Self::Result {
+            ResponseAsync::concurrent(self, msg, ctx, |act, _, _| async move {
+                if act.heap_alloc {
+                    let mut buffer = Vec::with_capacity(100_0000);
+                    let _ = act.file.lock().await.read(&mut buffer).await.unwrap();
+                } else {
+                    let mut buffer = [0u8; 2_048];
+                    let _ = act.file.lock().await.read(&mut buffer).await.unwrap();
                 }
-                .into_actor(self),
-            ))
+            })
         }
     }
 
@@ -183,15 +185,18 @@ fn main() {
                 let file_path = file_path.clone();
                 let addr = ActixAsyncActor::create_async(move |_| async move {
                     let file = File::open(file_path.as_str()).await.unwrap();
-                    ActixAsyncActor { file, heap_alloc }
+                    ActixAsyncActor {
+                        file: LocalMutex::new(file, false),
+                        heap_alloc,
+                    }
                 });
 
                 let mut exclusives = FuturesUnordered::new();
                 let mut concurrents = FuturesUnordered::new();
 
                 for _ in 0..rounds {
-                    exclusives.push(addr.wait(ExclusiveMessage));
-                    concurrents.push(addr.send(ExclusiveMessage));
+                    exclusives.push(addr.send(ExclusiveMessage));
+                    concurrents.push(addr.send(ConcurrentMessage));
                 }
 
                 let start = Instant::now();
@@ -216,7 +221,7 @@ fn main() {
                 let file = File::open(file_path.clone()).await.unwrap();
                 let heap_alloc = heap_alloc;
                 let addr = ActixActor::create(move |_| ActixActor {
-                    file: Rc::new(RefCell::new(file)),
+                    file: LocalMutex::new(file, false),
                     heap_alloc,
                 });
 
