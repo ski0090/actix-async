@@ -49,13 +49,12 @@ where
     M: Message,
     Self: Actor,
 {
+    type Future<'res>: Future<Output = M::Result> + 'res;
+    type FutureWait<'res>: Future<Output = M::Result> + 'res;
+
     /// concurrent handler. `Actor` and `Context` are borrowed immutably so it's safe to handle
     /// multiple messages at the same time.
-    fn handle<'act, 'ctx, 'res>(
-        &'act self,
-        msg: M,
-        ctx: &'ctx Context<Self>,
-    ) -> LocalBoxFuture<'res, M::Result>
+    fn handle<'act, 'ctx, 'res>(&'act self, msg: M, ctx: &'ctx Context<Self>) -> Self::Future<'res>
     where
         'act: 'res,
         'ctx: 'res;
@@ -66,14 +65,10 @@ where
         &'act mut self,
         msg: M,
         ctx: &'ctx mut Context<Self>,
-    ) -> LocalBoxFuture<'res, M::Result>
+    ) -> Self::FutureWait<'res>
     where
         'act: 'res,
-        'ctx: 'res,
-    {
-        // fall back to handle by default
-        self.handle(msg, ctx)
-    }
+        'ctx: 'res;
 }
 
 impl<A, F, R> Handler<FunctionMessage<F, R>> for A
@@ -82,16 +77,32 @@ where
     F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
+    type Future<'res> = impl Future<Output = R> + 'res;
+    type FutureWait<'res> = impl Future<Output = R> + 'res;
+
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         msg: FunctionMessage<F, R>,
         ctx: &'ctx Context<Self>,
-    ) -> LocalBoxFuture<'res, R>
+    ) -> Self::Future<'res>
     where
         'act: 'res,
         'ctx: 'res,
     {
         (msg.func)(self, ctx)
+    }
+
+    fn handle_wait<'act, 'ctx, 'res>(
+        &'act mut self,
+        msg: FunctionMessage<F, R>,
+        ctx: &'ctx mut Context<Self>,
+    ) -> Self::FutureWait<'res>
+    where
+        'act: 'res,
+        'ctx: 'res,
+    {
+        // fall back to handle by default
+        async move { self.handle(msg, ctx).await }
     }
 }
 
@@ -101,28 +112,31 @@ where
     F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
+    type Future<'res> = impl Future<Output = R> + 'res;
+    type FutureWait<'res> = impl Future<Output = R> + 'res;
+
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         _: FunctionMutMessage<F, R>,
         _: &'ctx Context<Self>,
-    ) -> LocalBoxFuture<'res, R>
+    ) -> Self::Future<'res>
     where
         'act: 'res,
         'ctx: 'res,
     {
-        unreachable!("Handler::handle can not be called on FunctionMutMessage");
+        async { unimplemented!("Handler::handle can not be called on FunctionMutMessage") }
     }
 
     fn handle_wait<'act, 'ctx, 'res>(
         &'act mut self,
         msg: FunctionMutMessage<F, R>,
         ctx: &'ctx mut Context<Self>,
-    ) -> LocalBoxFuture<'res, R>
+    ) -> Self::FutureWait<'res>
     where
         'act: 'res,
         'ctx: 'res,
     {
-        (msg.func)(self, ctx)
+        async move { (msg.func)(self, ctx).await }
     }
 }
 
