@@ -113,7 +113,8 @@ mod actix_actor {
         type Result = ResponseAsync<()>;
 
         fn handle(&mut self, msg: ExclusiveMessage, ctx: &mut Context<Self>) -> Self::Result {
-            ResponseAsync::concurrent(self, msg, ctx, |act, _, _| async move {
+            ResponseAsync::concurrent(self, ctx, |act, _| async move {
+                let _msg = msg;
                 if act.heap_alloc {
                     let mut buffer = Vec::with_capacity(100_0000);
                     let _ = act.file.lock().await.read(&mut buffer).await.unwrap();

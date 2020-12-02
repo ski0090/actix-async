@@ -198,7 +198,7 @@ impl<A: Actor> ContextFuture<A> {
     #[cold]
     fn clear_cache(&mut self) {
         self.cache_mut.clear();
-        self.cache_ref.0.clear();
+        self.cache_ref.clear();
     }
 }
 

@@ -2,6 +2,7 @@ use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::marker::PhantomData;
 use core::mem::{swap, transmute};
+use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::read;
 use core::task::{Context as StdContext, Poll};
@@ -225,6 +226,7 @@ impl<A: Actor> Context<A> {
         ContextJoinHandle { handle }
     }
 
+    #[inline(always)]
     pub(crate) fn is_running(&self) -> bool {
         self.state.get() == ActorState::Running
     }
@@ -236,7 +238,21 @@ impl<A: Actor> Context<A> {
 
 type Task = LocalBoxFuture<'static, ()>;
 
-pub(crate) struct CacheRef<A>(pub(crate) Vec<Task>, PhantomData<A>);
+pub(crate) struct CacheRef<A>(Vec<Task>, PhantomData<A>);
+
+impl<A> Deref for CacheRef<A> {
+    type Target = Vec<Task>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<A> DerefMut for CacheRef<A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl<A: Actor> CacheRef<A> {
     fn new() -> Self {
@@ -244,46 +260,31 @@ impl<A: Actor> CacheRef<A> {
     }
 
     #[inline(always)]
-    fn poll_unpin(&mut self, cx: &mut StdContext<'_>) {
-        // poll concurrent messages
-        let mut i = 0;
-        while i < self.0.len() {
-            match self.0[i].as_mut().poll(cx) {
-                Poll::Ready(()) => {
-                    // SAFETY:
-                    // Vec::swap_remove with no len check and drop of removed element in place.
-                    // i is guaranteed to be smaller than this.cache_ref.len()
-                    unsafe {
-                        self.0.swap_remove_uncheck(i);
-                    }
-                }
-                Poll::Pending => i += 1,
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    #[inline(always)]
     fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: &Context<A>) {
-        self.0.push(msg.handle(act, ctx));
+        self.push(msg.handle(act, ctx));
     }
 }
 
 pub(crate) struct CacheMut(Option<Task>);
 
+impl Deref for CacheMut {
+    type Target = Option<Task>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for CacheMut {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 impl CacheMut {
     #[inline(always)]
     fn new() -> Self {
         Self(None)
-    }
-
-    #[inline(always)]
-    fn get_mut(&mut self) -> Option<&mut Task> {
-        self.0.as_mut()
     }
 
     #[inline(always)]
@@ -299,11 +300,6 @@ impl CacheMut {
         ctx: &mut Context<A>,
     ) {
         self.0 = Some(msg.handle_wait(act, ctx));
-    }
-
-    #[inline(always)]
-    fn is_some(&self) -> bool {
-        self.0.is_some()
     }
 }
 
@@ -383,10 +379,23 @@ impl<A: Actor> ContextFuture<A> {
         let this = self.as_mut().get_mut();
 
         // poll concurrent messages
-        this.cache_ref.poll_unpin(cx);
+        let mut i = 0;
+        while i < this.cache_ref.len() {
+            match this.cache_ref[i].as_mut().poll(cx) {
+                Poll::Ready(()) => {
+                    // SAFETY:
+                    // Vec::swap_remove with no len check and drop of removed element in place.
+                    // i is guaranteed to be smaller than this.cache_ref.len()
+                    unsafe {
+                        this.cache_ref.swap_remove_uncheck(i);
+                    }
+                }
+                Poll::Pending => i += 1,
+            }
+        }
 
         // try to poll exclusive message.
-        match this.cache_mut.get_mut() {
+        match this.cache_mut.as_mut() {
             // still have concurrent messages. finish them.
             Some(_) if !this.cache_ref.is_empty() => return Poll::Pending,
             // poll exclusive message and remove it when success.
@@ -583,9 +592,7 @@ impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
     #[inline(always)]
     fn merge(&mut self, ctx: &mut Context<A>) {
         let stream = ctx.stream_message.get_mut();
-        while let Some(stream) = stream.pop() {
-            self.push(stream);
-        }
+        self.extend(stream.drain(0..));
     }
 }
 
@@ -593,9 +600,7 @@ impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
     #[inline(always)]
     fn merge(&mut self, ctx: &mut Context<A>) {
         let future = ctx.future_message.get_mut();
-        while let Some(future) = future.pop() {
-            self.push(future);
-        }
+        self.extend(future.drain(0..));
     }
 }
 
