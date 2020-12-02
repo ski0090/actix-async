@@ -1,3 +1,7 @@
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+#![feature(type_alias_impl_trait)]
+
 use std::time::{Duration, Instant};
 
 use futures_util::stream::FuturesUnordered;
@@ -28,10 +32,11 @@ pub struct ExclusiveMessage;
 pub struct ConcurrentMessage;
 
 mod actix_async_actor {
+
     pub use actix_async::prelude::*;
     pub use actix_rt::Arbiter;
-    use async_trait::async_trait;
     pub use futures_intrusive::sync::LocalMutex;
+    use std::future::Future;
     pub use tokio02::fs::File;
     pub use tokio02::io::AsyncReadExt;
 
@@ -62,25 +67,71 @@ mod actix_async_actor {
 
     message!(ExclusiveMessage, ());
 
-    #[async_trait(?Send)]
     impl Handler<ExclusiveMessage> for ActixAsyncActor {
-        async fn handle(&self, _: ExclusiveMessage, _ctx: &Context<Self>) {
-            if self.heap_alloc {
-                let mut buffer = Vec::with_capacity(100_0000);
-                let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
-            } else {
-                let mut buffer = [0u8; 2_048];
-                let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
+        type Future<'a> = impl Future<Output = ()> + 'a;
+        type FutureWait<'a> = impl Future<Output = ()> + 'a;
+
+        fn handle<'a, 'c, 'r>(
+            &'a self,
+            _: ExclusiveMessage,
+            _: &'c Context<Self>,
+        ) -> Self::Future<'r>
+        where
+            'a: 'r,
+            'c: 'r,
+        {
+            async move {
+                if self.heap_alloc {
+                    let mut buffer = Vec::with_capacity(100_0000);
+                    let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
+                } else {
+                    let mut buffer = [0u8; 2_048];
+                    let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
+                }
             }
+        }
+
+        fn handle_wait<'a, 'c, 'r>(
+            &'a mut self,
+            _: ExclusiveMessage,
+            _: &'c mut Context<Self>,
+        ) -> Self::FutureWait<'r>
+        where
+            'a: 'r,
+            'c: 'r,
+        {
+            async { unimplemented!() }
         }
     }
 
     message!(ConcurrentMessage, ());
 
-    #[async_trait(?Send)]
     impl Handler<ConcurrentMessage> for ActixAsyncActor {
-        async fn handle(&self, _: ConcurrentMessage, _ctx: &Context<Self>) {
-            actix::clock::delay_for(Duration::from_millis(1)).await;
+        type Future<'a> = impl Future<Output = ()> + 'a;
+        type FutureWait<'a> = impl Future<Output = ()> + 'a;
+
+        fn handle<'a, 'c, 'r>(
+            &'a self,
+            _: ConcurrentMessage,
+            _: &'c Context<Self>,
+        ) -> Self::Future<'r>
+        where
+            'a: 'r,
+            'c: 'r,
+        {
+            actix::clock::delay_for(Duration::from_millis(1))
+        }
+
+        fn handle_wait<'a, 'c, 'r>(
+            &'a mut self,
+            _: ConcurrentMessage,
+            _: &'c mut Context<Self>,
+        ) -> Self::FutureWait<'r>
+        where
+            'a: 'r,
+            'c: 'r,
+        {
+            async { unimplemented!() }
         }
     }
 }

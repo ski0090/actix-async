@@ -5,6 +5,12 @@
 
 ### Example:
 ```rust
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+#![feature(type_alias_impl_trait)]
+
+use std::future::Future;
+
 use actix_async::prelude::*;
 
 // actor type
@@ -14,22 +20,38 @@ actor!(TestActor);
 
 // message type
 struct TestMessage;
-// impl message trait for message type.
-// the second argument is the result type of Message.
-// it must match the return type of Handler<Message>::handle method.
+// impl message trait for message type and define the result type.
 message!(TestMessage, u32);
 
 // impl handler trait for message and actor types.
-#[async_trait::async_trait(?Send)]
 impl Handler<TestMessage> for TestActor {
+    type Future<'res> = impl Future<Output = u32> + 'res;
+    type FutureWait<'res> = impl Future<Output = u32> + 'res;
+
     // concurrent message handler where actor state and context are borrowed immutably.
-    async fn handle(&self, _: TestMessage, _: &Context<Self>) -> u32 {
-        996
+    fn handle<'act, 'ctx, 'res>(
+        &'act self,
+        msg: TestMessage,
+        ctx: &'ctx Context<Self>
+    ) -> Self::Future<'res>
+    where
+        'act: 'res,
+        'ctx: 'res
+    {
+        async { 996 }
     }
-    
+
     // exclusive message handler where actor state and context are borrowed mutably.
-    async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> u32 {
-        251
+    fn handle_wait<'act, 'ctx, 'res>(
+        &'act mut self,
+        msg: TestMessage,
+        ctx: &'ctx mut Context<Self>
+    ) -> Self::FutureWait<'res>
+    where
+        'act: 'res,
+        'ctx: 'res
+    {
+        async { 251 }
     }
 }
 
@@ -42,10 +64,10 @@ async fn main() {
     let address = actor.start();
 
     // send concurrent message with address
-    let res: Result<u32, ActixAsyncError> = address.send(TestMessage).await;
+    let res = address.send(TestMessage).await.unwrap();
 
     // got result
-    assert_eq!(996, res.unwrap());
+    assert_eq!(996, res);
 
     // send exclusive message with address
     let res = address.wait(TestMessage).await.unwrap();

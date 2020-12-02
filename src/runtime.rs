@@ -4,6 +4,10 @@ use core::time::Duration;
 /// Runtime trait for running actor on various runtimes.
 /// # example:
 /// ```rust
+/// #![allow(incomplete_features)]
+/// #![feature(generic_associated_types)]
+/// #![feature(type_alias_impl_trait)]
+///
 /// use std::future::Future;
 /// use std::pin::Pin;
 /// use std::time::Duration;
@@ -38,10 +42,31 @@ use core::time::Duration;
 /// struct TestMessage;
 /// message!(TestMessage, usize);
 ///
-/// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for AsyncStdActor {
-///     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
-///         996
+///     type Future<'res> = impl Future<Output = usize> + 'res;
+///     type FutureWait<'res> = impl Future<Output = usize> + 'res;
+///
+///     fn handle<'act, 'ctx, 'res>(
+///         &'act self,
+///         msg: TestMessage,
+///         ctx: &'ctx Context<Self>
+///     ) -> Self::Future<'res>
+///     where
+///         'act: 'res,
+///         'ctx: 'res
+///     {
+///         async { 996 }
+///     }
+///
+///     fn handle_wait<'act, 'ctx, 'res>(
+///         &'act mut self,
+///         msg: TestMessage,
+///         ctx: &'ctx mut Context<Self>
+///     ) -> Self::FutureWait<'res>
+///     where
+///         'act: 'res,
+///         'ctx: 'res{
+///         async{ unimplemented!() }
 ///     }
 /// }
 ///
@@ -49,10 +74,31 @@ use core::time::Duration;
 /// struct TokioActor;
 /// actor!(TokioActor);
 ///
-/// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for TokioActor {
-///     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
-///         251
+///     type Future<'res> = impl Future<Output = usize> + 'res;
+///     type FutureWait<'res> = impl Future<Output = usize> + 'res;
+///
+///     fn handle<'act, 'ctx, 'res>(
+///         &'act self,
+///         msg: TestMessage,
+///         ctx: &'ctx Context<Self>
+///     ) -> Self::Future<'res>
+///     where
+///         'act: 'res,
+///         'ctx: 'res
+///     {
+///         async { 251 }
+///     }
+///
+///     fn handle_wait<'act, 'ctx, 'res>(
+///         &'act mut self,
+///         msg: TestMessage,
+///         ctx: &'ctx mut Context<Self>
+///     ) -> Self::FutureWait<'res>
+///     where
+///         'act: 'res,
+///         'ctx: 'res{
+///         async{ unimplemented!() }
 ///     }
 /// }
 ///

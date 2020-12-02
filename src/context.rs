@@ -162,6 +162,12 @@ impl<A: Actor> Context<A> {
     ///
     /// # example:
     /// ```rust
+    /// #![allow(incomplete_features)]
+    /// #![feature(generic_associated_types)]
+    /// #![feature(type_alias_impl_trait)]
+    ///
+    /// use std::future::Future;
+    ///
     /// use actix_async::prelude::*;
     /// use futures_util::stream::once;
     ///
@@ -171,15 +177,39 @@ impl<A: Actor> Context<A> {
     /// struct StreamMessage;
     /// message!(StreamMessage, ());
     ///
-    /// #[async_trait::async_trait(?Send)]
     /// impl Handler<StreamMessage> for StreamActor {
-    ///     async fn handle(&self, _: StreamMessage, _: &Context<Self>) {
-    ///     /*
-    ///         The stream is owned by Context so there is no default way to return anything
-    ///         from the handler.
-    ///         A suggest way to return anything here is to use a channel sender or another
-    ///         actor's Addr to StreamActor as it's state.
-    ///     */
+    ///     type Future<'res> = impl Future<Output = ()> + 'res;
+    ///     type FutureWait<'res> = impl Future<Output = ()> + 'res;
+    ///
+    ///     fn handle<'act, 'ctx, 'res>(
+    ///         &'act self,
+    ///         _: StreamMessage,
+    ///         _: &'ctx Context<Self>
+    ///     ) -> Self::Future<'res>
+    ///     where
+    ///         'act: 'res,
+    ///         'ctx: 'res
+    ///     {
+    ///         async {
+    ///             /*
+    ///             The stream is owned by Context so there is no default way to return anything
+    ///             from the handler.
+    ///             A suggest way to return anything here is to use a channel sender or another
+    ///             actor's Addr to StreamActor as it's state.
+    ///             */
+    ///         }
+    ///     }
+    ///
+    ///     fn handle_wait<'act, 'ctx, 'res>(
+    ///         &'act mut self,
+    ///         _: StreamMessage,
+    ///         _: &'ctx mut Context<Self>
+    ///     ) -> Self::FutureWait<'res>
+    ///     where
+    ///         'act: 'res,
+    ///         'ctx: 'res
+    ///     {
+    ///         async { unimplemented!() }
     ///     }
     /// }
     ///

@@ -12,6 +12,12 @@ use crate::util::futures::LocalBoxFuture;
 /// Trait define how actor handle a message.
 /// # example:
 /// ```rust:
+/// #![allow(incomplete_features)]
+/// #![feature(generic_associated_types)]
+/// #![feature(type_alias_impl_trait)]
+///
+/// use std::future::Future;
+///
 /// use actix_async::prelude::*;
 ///
 /// struct TestActor;
@@ -20,27 +26,37 @@ use crate::util::futures::LocalBoxFuture;
 /// struct TestMessage;
 /// message!(TestMessage, ());
 ///
-/// struct TestMessage2;
-/// message!(TestMessage2, ());
-///
-/// // use async method directly with the help of async_trait crate.
-/// #[async_trait::async_trait(?Send)]
-/// impl Handler<TestMessage> for TestActor {
-///    async fn handle(&self, _: TestMessage,ctx: &Context<Self>) {
-///         let _this = self;
-///         let _ctx = ctx;
-///         println!("hello from TestMessage");
-///     }
-/// }
-///
 /// // impl boxed future manually without async_trait.
-/// impl Handler<TestMessage2> for TestActor {
-///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: &'c Context<Self>) -> LocalBoxFuture<'r, ()> {
-///         Box::pin(async move {
+/// impl Handler<TestMessage> for TestActor {
+///     type Future<'res> = impl Future<Output = ()> + 'res;
+///     type FutureWait<'res> = impl Future<Output = ()> + 'res;
+///     
+///     fn handle<'act, 'ctx, 'res>(
+///         &'act self,
+///         _: TestMessage,
+///         ctx: &'ctx Context<Self>
+///     ) -> Self::Future<'res>
+///     where
+///         'act: 'res,
+///         'ctx: 'res,
+///     {
+///         async move {
 ///             let _this = self;
 ///             let _ctx = ctx;
 ///             println!("hello from TestMessage2");
-///         })
+///         }
+///     }
+///
+///     fn handle_wait<'act, 'ctx, 'res>(
+///         &'act mut self,
+///         _: TestMessage,
+///         _: &'ctx mut Context<Self>
+///     ) -> Self::FutureWait<'res>
+///     where
+///         'act: 'res,
+///         'ctx: 'res
+///     {
+///         async { unimplemented!() }
 ///     }
 /// }
 /// ```
@@ -136,7 +152,7 @@ where
         'act: 'res,
         'ctx: 'res,
     {
-        async move { (msg.func)(self, ctx).await }
+        (msg.func)(self, ctx)
     }
 }
 

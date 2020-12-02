@@ -52,6 +52,11 @@ impl Supervisor {
     ///
     /// # example:
     /// ```rust
+    /// #![allow(incomplete_features)]
+    /// #![feature(generic_associated_types)]
+    /// #![feature(type_alias_impl_trait)]
+    ///
+    /// use std::future::Future;
     /// use std::sync::Arc;
     /// use std::sync::atomic::{AtomicUsize, Ordering};
     /// use std::thread::ThreadId;
@@ -67,16 +72,36 @@ impl Supervisor {
     /// struct Msg;
     /// message!(Msg, ThreadId);
     ///
-    /// #[async_trait::async_trait(?Send)]
     /// impl Handler<Msg> for TestActor {
-    ///     async fn handle(&self, _: Msg, _: &Context<Self>) -> ThreadId {
-    ///         unimplemented!()
+    ///     type Future<'res> = impl Future<Output = ThreadId> + 'res;
+    ///     type FutureWait<'res> = impl Future<Output = ThreadId> + 'res;
+    ///
+    ///     fn handle<'act, 'ctx, 'res>(
+    ///         &'act self,
+    ///         _: Msg,
+    ///         _: &'ctx Context<Self>
+    ///     ) -> Self::Future<'res>
+    ///     where
+    ///         'act: 'res,
+    ///         'ctx: 'res,
+    ///     {
+    ///         async { unimplemented!() }
     ///     }
     ///
-    ///     async fn handle_wait(&mut self, _: Msg, _: &mut Context<Self>) -> ThreadId {
-    ///         actix_rt::time::sleep(Duration::from_millis(1)).await;
-    ///         // return the current thread id of actor.
-    ///         std::thread::current().id()
+    ///     fn handle_wait<'act, 'ctx, 'res>(
+    ///         &mut self,
+    ///         _: Msg,
+    ///         _: &mut Context<Self>
+    ///     ) -> Self::FutureWait<'res>
+    ///     where
+    ///         'act: 'res,
+    ///         'ctx: 'res,
+    ///     {
+    ///         async {
+    ///            actix_rt::time::sleep(Duration::from_millis(1)).await;
+    ///            // return the current thread id of actor.
+    ///            std::thread::current().id()
+    ///         }
     ///     }
     /// }
     ///

@@ -2,6 +2,12 @@
 //!
 //! # Example:
 //! ```rust
+//! #![allow(incomplete_features)]
+//! #![feature(generic_associated_types)]
+//! #![feature(type_alias_impl_trait)]
+//!
+//! use std::future::Future;
+//!
 //! use actix_async::prelude::*;
 //!
 //! // actor type
@@ -15,16 +21,34 @@
 //! message!(TestMessage, u32);
 //!
 //! // impl handler trait for message and actor types.
-//! #[async_trait::async_trait(?Send)]
 //! impl Handler<TestMessage> for TestActor {
+//!     type Future<'res> = impl Future<Output = u32> + 'res;
+//!     type FutureWait<'res> = impl Future<Output = u32> + 'res;
+//!
 //!     // concurrent message handler where actor state and context are borrowed immutably.
-//!     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> u32 {
-//!         996
+//!     fn handle<'act, 'ctx, 'res>(
+//!         &'act self,
+//!         msg: TestMessage,
+//!         ctx: &'ctx Context<Self>
+//!     ) -> Self::Future<'res>
+//!     where
+//!         'act: 'res,
+//!         'ctx: 'res
+//!     {
+//!         async { 996 }
 //!     }
-//!     
+//!
 //!     // exclusive message handler where actor state and context are borrowed mutably.
-//!     async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> u32 {
-//!         251
+//!     fn handle_wait<'act, 'ctx, 'res>(
+//!         &'act mut self,
+//!         msg: TestMessage,
+//!         ctx: &'ctx mut Context<Self>
+//!     ) -> Self::FutureWait<'res>
+//!     where
+//!         'act: 'res,
+//!         'ctx: 'res
+//!     {
+//!         async { 251 }
 //!     }
 //! }
 //!
@@ -105,6 +129,7 @@ mod test {
     use crate as actix_async;
     use actix_async::prelude::*;
     use actix_async::supervisor::Supervisor;
+    use core::future::Future;
 
     #[actix_rt::test]
     async fn start_in_arbiter() {
@@ -305,14 +330,32 @@ mod test {
 
     message!(TestMessage, usize);
 
-    #[async_trait(?Send)]
     impl Handler<TestMessage> for TestActor {
-        async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
-            self.0
+        type Future<'res> = impl Future<Output = usize> + 'res;
+        type FutureWait<'res> = impl Future<Output = usize> + 'res;
+
+        fn handle<'act, 'ctx, 'res>(
+            &'act self,
+            _: TestMessage,
+            _: &'ctx Context<Self>,
+        ) -> Self::Future<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async move { self.0 }
         }
 
-        async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> usize {
-            251
+        fn handle_wait<'act, 'ctx, 'res>(
+            &'act mut self,
+            _: TestMessage,
+            _: &'ctx mut Context<Self>,
+        ) -> Self::FutureWait<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async { 251 }
         }
     }
 
@@ -320,42 +363,56 @@ mod test {
 
     message!(TestIntervalMessage, (Arc<AtomicUsize>, ContextJoinHandle));
 
-    #[async_trait(?Send)]
     impl Handler<TestIntervalMessage> for TestActor {
-        async fn handle(
-            &self,
-            _: TestIntervalMessage,
-            ctx: &Context<Self>,
-        ) -> (Arc<AtomicUsize>, ContextJoinHandle) {
-            let size = Arc::new(AtomicUsize::new(0));
-            let handle = ctx.run_interval(Duration::from_millis(500), {
-                let size = size.clone();
-                move |_, _| {
-                    Box::pin(async move {
-                        size.fetch_add(1, Ordering::SeqCst);
-                    })
-                }
-            });
+        type Future<'res> = impl Future<Output = (Arc<AtomicUsize>, ContextJoinHandle)> + 'res;
+        type FutureWait<'res> = impl Future<Output = (Arc<AtomicUsize>, ContextJoinHandle)> + 'res;
 
-            (size, handle)
+        fn handle<'act, 'ctx, 'res>(
+            &'act self,
+            _: TestIntervalMessage,
+            ctx: &'ctx Context<Self>,
+        ) -> Self::Future<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async move {
+                let size = Arc::new(AtomicUsize::new(0));
+                let handle = ctx.run_interval(Duration::from_millis(500), {
+                    let size = size.clone();
+                    move |_, _| {
+                        Box::pin(async move {
+                            size.fetch_add(1, Ordering::SeqCst);
+                        })
+                    }
+                });
+
+                (size, handle)
+            }
         }
 
-        async fn handle_wait(
-            &mut self,
+        fn handle_wait<'act, 'ctx, 'res>(
+            &'act mut self,
             _: TestIntervalMessage,
-            ctx: &mut Context<Self>,
-        ) -> (Arc<AtomicUsize>, ContextJoinHandle) {
-            let size = Arc::new(AtomicUsize::new(0));
-            let handle = ctx.run_wait_interval(Duration::from_millis(500), {
-                let size = size.clone();
-                move |_, _| {
-                    Box::pin(async move {
-                        size.fetch_add(1, Ordering::SeqCst);
-                    })
-                }
-            });
+            ctx: &'ctx mut Context<Self>,
+        ) -> Self::FutureWait<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async move {
+                let size = Arc::new(AtomicUsize::new(0));
+                let handle = ctx.run_wait_interval(Duration::from_millis(500), {
+                    let size = size.clone();
+                    move |_, _| {
+                        Box::pin(async move {
+                            size.fetch_add(1, Ordering::SeqCst);
+                        })
+                    }
+                });
 
-            (size, handle)
+                (size, handle)
+            }
         }
     }
 
@@ -363,10 +420,32 @@ mod test {
 
     message!(TestTimeoutMessage, ());
 
-    #[async_trait(?Send)]
     impl Handler<TestTimeoutMessage> for TestActor {
-        async fn handle(&self, _: TestTimeoutMessage, _: &Context<Self>) {
-            sleep(Duration::from_secs(2)).await;
+        type Future<'res> = impl Future<Output = ()> + 'res;
+        type FutureWait<'res> = impl Future<Output = ()> + 'res;
+
+        fn handle<'act, 'ctx, 'res>(
+            &'act self,
+            _: TestTimeoutMessage,
+            _: &'ctx Context<Self>,
+        ) -> Self::Future<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            sleep(Duration::from_secs(2))
+        }
+
+        fn handle_wait<'act, 'ctx, 'res>(
+            &'act mut self,
+            _: TestTimeoutMessage,
+            _: &'ctx mut Context<Self>,
+        ) -> Self::FutureWait<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async { unimplemented!() }
         }
     }
 
@@ -376,14 +455,38 @@ mod test {
         type Result = ContextJoinHandle;
     }
 
-    #[async_trait(?Send)]
     impl Handler<TestDelayMessage> for TestActor {
-        async fn handle(&self, _: TestDelayMessage, ctx: &Context<Self>) -> ContextJoinHandle {
-            ctx.run_wait_later(Duration::from_millis(500), |act, _| {
-                Box::pin(async move {
-                    act.0 += 1;
+        type Future<'res> = impl Future<Output = ContextJoinHandle> + 'res;
+        type FutureWait<'res> = impl Future<Output = ContextJoinHandle> + 'res;
+
+        fn handle<'act, 'ctx, 'res>(
+            &'act self,
+            _: TestDelayMessage,
+            ctx: &'ctx Context<Self>,
+        ) -> Self::Future<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async move {
+                ctx.run_wait_later(Duration::from_millis(500), |act, _| {
+                    Box::pin(async move {
+                        act.0 += 1;
+                    })
                 })
-            })
+            }
+        }
+
+        fn handle_wait<'act, 'ctx, 'res>(
+            &'act mut self,
+            _: TestDelayMessage,
+            _: &'ctx mut Context<Self>,
+        ) -> Self::FutureWait<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async { unimplemented!() }
         }
     }
 
@@ -391,10 +494,36 @@ mod test {
 
     message!(TestPanicMsg, ());
 
-    #[async_trait(?Send)]
     impl Handler<TestPanicMsg> for TestActor {
-        async fn handle(&self, _: TestPanicMsg, _: &Context<Self>) {
-            panic!("This is a purpose panic to test actor recovery");
+        type Future<'res> = impl Future<Output = ()> + 'res;
+        type FutureWait<'res> = impl Future<Output = ()> + 'res;
+
+        fn handle<'act, 'ctx, 'res>(
+            &'act self,
+            _: TestPanicMsg,
+            _: &'ctx Context<Self>,
+        ) -> Self::Future<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async {
+                panic!("This is a purpose panic to test actor recovery");
+            }
+        }
+
+        fn handle_wait<'act, 'ctx, 'res>(
+            &'act mut self,
+            _: TestPanicMsg,
+            _: &'ctx mut Context<Self>,
+        ) -> Self::FutureWait<'res>
+        where
+            'act: 'res,
+            'ctx: 'res,
+        {
+            async {
+                panic!("This is a purpose panic to test actor recovery");
+            }
         }
     }
 }

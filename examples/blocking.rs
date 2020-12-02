@@ -1,3 +1,8 @@
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+#![feature(type_alias_impl_trait)]
+
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use actix_async::prelude::*;
@@ -21,26 +26,42 @@ actor!(BlockingActor);
 struct Msg;
 message!(Msg, ());
 
-#[async_trait::async_trait(?Send)]
 impl Handler<Msg> for BlockingActor {
-    async fn handle(&self, _: Msg, _: &Context<Self>) {
-        unimplemented!()
+    type Future<'res> = impl Future<Output = ()> + 'res;
+    type FutureWait<'res> = impl Future<Output = ()> + 'res;
+
+    fn handle<'act, 'ctx, 'res>(&'act self, _: Msg, _: &'ctx Context<Self>) -> Self::Future<'res>
+    where
+        'act: 'res,
+        'ctx: 'res,
+    {
+        async { unimplemented!() }
     }
 
     // since we are running pure blocking code. There is no point using concurrent handler
     // at all. use handle_wait would do just fine.
-    async fn handle_wait(&mut self, _: Msg, ctx: &mut Context<Self>) {
-        // use sleep to simulate heavy blocking computation.
-        std::thread::sleep(Duration::from_millis(1));
+    fn handle_wait<'act, 'ctx, 'res>(
+        &'act mut self,
+        _: Msg,
+        ctx: &'ctx mut Context<Self>,
+    ) -> Self::FutureWait<'res>
+    where
+        'act: 'res,
+        'ctx: 'res,
+    {
+        async move {
+            // use sleep to simulate heavy blocking computation.
+            std::thread::sleep(Duration::from_millis(1));
 
-        // sadly the code below would have no chance to run correctly.
-        // due to long time of blocking of thread.
-        let now = Instant::now();
-        ctx.run_later(Duration::from_millis(1), move |_, _| {
-            Box::pin(async move {
-                println!("delayed task took {:?} to run", now.elapsed());
-            })
-        });
+            // sadly the code below would have no chance to run correctly.
+            // due to long time of blocking of thread.
+            let now = Instant::now();
+            ctx.run_later(Duration::from_millis(1), move |_, _| {
+                Box::pin(async move {
+                    println!("delayed task took {:?} to run", now.elapsed());
+                })
+            });
+        }
     }
 }
 
