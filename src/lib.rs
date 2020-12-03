@@ -3,8 +3,7 @@
 //! # Example:
 //! ```rust
 //! #![allow(incomplete_features)]
-//! #![feature(generic_associated_types)]
-//! #![feature(type_alias_impl_trait)]
+//! #![feature(generic_associated_types, type_alias_impl_trait)]
 //!
 //! use std::future::Future;
 //!
@@ -77,8 +76,7 @@
 #![no_std]
 #![forbid(unused_imports, unused_mut, unused_variables)]
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
-#![feature(type_alias_impl_trait)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 extern crate alloc;
 

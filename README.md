@@ -1,13 +1,14 @@
 [actix](https://crates.io/crates/actix) API(mostly) with async/await friendly.
 
 ### Requirement:
-- MSRV: rustc 1.48 and above
+- MSRV: rustc 1.50.0-nightly (1c389ffef 2020-11-24) and above.
+- allow(incomplete_features) and feature(generic_associated_types, type_alias_impl_trait)
 
 ### Example:
 ```rust
+// enable unstable features.
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
-#![feature(type_alias_impl_trait)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 use std::future::Future;
 
@@ -25,6 +26,8 @@ message!(TestMessage, u32);
 
 // impl handler trait for message and actor types.
 impl Handler<TestMessage> for TestActor {
+    // generic associate type is needed to bind the 'res lifetime.
+    // the output of opaque future must match the message! macro of Message type.
     type Future<'res> = impl Future<Output = u32> + 'res;
     type FutureWait<'res> = impl Future<Output = u32> + 'res;
 
@@ -38,7 +41,14 @@ impl Handler<TestMessage> for TestActor {
         'act: 'res,
         'ctx: 'res
     {
-        async { 996 }
+        // return async await block directly.
+        // move keyword is needed if self and/or context is borrowed.
+        async move {
+            let _msg = msg;
+            let _act = self;
+            let _ctx = ctx;
+            996 
+        }
     }
 
     // exclusive message handler where actor state and context are borrowed mutably.
@@ -51,7 +61,12 @@ impl Handler<TestMessage> for TestActor {
         'act: 'res,
         'ctx: 'res
     {
-        async { 251 }
+        async move {
+            let _msg = msg;
+            let _act = self;
+            let _ctx = ctx;
+            251 
+        }
     }
 }
 

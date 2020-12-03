@@ -13,8 +13,7 @@ use crate::util::futures::LocalBoxFuture;
 /// # example:
 /// ```rust:
 /// #![allow(incomplete_features)]
-/// #![feature(generic_associated_types)]
-/// #![feature(type_alias_impl_trait)]
+/// #![feature(generic_associated_types, type_alias_impl_trait)]
 ///
 /// use std::future::Future;
 ///
@@ -118,7 +117,7 @@ where
         'ctx: 'res,
     {
         // fall back to handle by default
-        async move { self.handle(msg, ctx).await }
+        self.handle(msg, ctx)
     }
 }
 
@@ -228,7 +227,7 @@ where
     }
 }
 
-#[inline]
+#[inline(always)]
 fn handle<F>(tx: Option<OneshotSender<F::Output>>, fut: F) -> LocalBoxFuture<'static, ()>
 where
     F: Future + 'static,
