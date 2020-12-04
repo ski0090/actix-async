@@ -27,7 +27,7 @@ message!(Msg, usize);
 
 impl Handler<Msg> for MyActor {
     type Future<'a> = impl Future<Output = usize> + 'a;
-    type FutureWait<'a> = impl Future<Output = usize> + 'a;
+    type FutureWait<'a> = Self::Future<'a>;
 
     fn handle<'act, 'ctx, 'res>(&'act self, _: Msg, _: &'ctx Context<Self>) -> Self::Future<'res>
     where
@@ -75,14 +75,15 @@ impl Handler<Msg> for MyActor {
 
     fn handle_wait<'act, 'ctx, 'res>(
         &'act mut self,
-        _: Msg,
-        _: &'ctx mut Context<Self>,
+        msg: Msg,
+        ctx: &'ctx mut Context<Self>,
     ) -> Self::FutureWait<'res>
     where
         'act: 'res,
         'ctx: 'res,
     {
-        async { unimplemented!() }
+        // fall back to concurrent handle.
+        self.handle(msg, ctx)
     }
 }
 

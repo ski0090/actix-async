@@ -32,13 +32,13 @@ pub struct ExclusiveMessage;
 pub struct ConcurrentMessage;
 
 mod actix_async_actor {
+    use std::future::Future;
 
     pub use actix_async::prelude::*;
     pub use actix_rt::Arbiter;
     pub use futures_intrusive::sync::LocalMutex;
-    use std::future::Future;
-    pub use tokio02::fs::File;
-    pub use tokio02::io::AsyncReadExt;
+    pub use tokio::fs::File;
+    pub use tokio::io::AsyncReadExt;
 
     use super::*;
 
@@ -46,30 +46,13 @@ mod actix_async_actor {
         pub file: LocalMutex<File>,
         pub heap_alloc: bool,
     }
-
-    pub struct Tokio02Runtime;
-
-    impl RuntimeService for Tokio02Runtime {
-        type Sleep = tokio02::time::Delay;
-
-        fn spawn<F: std::future::Future<Output = ()> + 'static>(f: F) {
-            tokio02::task::spawn_local(f);
-        }
-
-        fn sleep(dur: Duration) -> Self::Sleep {
-            tokio02::time::delay_for(dur)
-        }
-    }
-
-    impl Actor for ActixAsyncActor {
-        type Runtime = Tokio02Runtime;
-    }
+    actor!(ActixAsyncActor);
 
     message!(ExclusiveMessage, ());
 
     impl Handler<ExclusiveMessage> for ActixAsyncActor {
         type Future<'a> = impl Future<Output = ()> + 'a;
-        type FutureWait<'a> = impl Future<Output = ()> + 'a;
+        type FutureWait<'a> = Self::Future<'a>;
 
         fn handle<'a, 'c, 'r>(
             &'a self,
@@ -93,14 +76,14 @@ mod actix_async_actor {
 
         fn handle_wait<'a, 'c, 'r>(
             &'a mut self,
-            _: ExclusiveMessage,
-            _: &'c mut Context<Self>,
-        ) -> Self::FutureWait<'r>
+            msg: ExclusiveMessage,
+            ctx: &'c mut Context<Self>,
+        ) -> Self::Future<'r>
         where
             'a: 'r,
             'c: 'r,
         {
-            async { unimplemented!() }
+            self.handle(msg, ctx)
         }
     }
 
@@ -119,7 +102,7 @@ mod actix_async_actor {
             'a: 'r,
             'c: 'r,
         {
-            actix::clock::delay_for(Duration::from_millis(1))
+            actix_rt::time::sleep(Duration::from_millis(1))
         }
 
         fn handle_wait<'a, 'c, 'r>(
@@ -137,9 +120,6 @@ mod actix_async_actor {
 }
 
 mod actix_actor {
-    pub use std::cell::RefCell;
-    pub use std::rc::Rc;
-
     pub use actix::prelude::*;
     pub use futures_intrusive::sync::LocalMutex;
     pub use tokio02::fs::File;
@@ -227,75 +207,73 @@ fn main() {
 
     let file_path = collect_arg(&mut rounds, &mut heap_alloc);
 
-    actix::System::new("actix-async").block_on(async move {
-        {
-            use actix_async_actor::*;
-            println!("starting benchmark actix-async");
+    actix_rt::System::new("actix-async").block_on(async {
+        use actix_async_actor::*;
+        println!("starting benchmark actix-async");
 
-            let mut timing = Timing::new();
-            for _ in 0..10 {
-                let file_path = file_path.clone();
-                let addr = ActixAsyncActor::create_async(move |_| async move {
-                    let file = File::open(file_path.as_str()).await.unwrap();
-                    ActixAsyncActor {
-                        file: LocalMutex::new(file, false),
-                        heap_alloc,
-                    }
-                });
-
-                let mut exclusives = FuturesUnordered::new();
-                let mut concurrents = FuturesUnordered::new();
-
-                for _ in 0..rounds {
-                    exclusives.push(addr.send(ExclusiveMessage));
-                    concurrents.push(addr.send(ConcurrentMessage));
-                }
-
-                let start = Instant::now();
-                while exclusives.next().await.is_some() {}
-                timing.add_exclusive(Instant::now().duration_since(start));
-
-                let start = Instant::now();
-                while concurrents.next().await.is_some() {}
-                timing.add_concurrent(Instant::now().duration_since(start));
-            }
-
-            timing.print_res();
-        }
-
-        {
-            use actix_actor::*;
-            println!("starting benchmark actix");
-
-            let mut timing = Timing::new();
-
-            for _ in 0..10 {
-                let file = File::open(file_path.clone()).await.unwrap();
-                let heap_alloc = heap_alloc;
-                let addr = ActixActor::create(move |_| ActixActor {
+        let mut timing = Timing::new();
+        for _ in 0..10 {
+            let file_path = file_path.clone();
+            let addr = ActixAsyncActor::create_async(move |_| async move {
+                let file = File::open(file_path.as_str()).await.unwrap();
+                ActixAsyncActor {
                     file: LocalMutex::new(file, false),
                     heap_alloc,
-                });
-
-                let mut exclusives = FuturesUnordered::new();
-                let mut concurrents = FuturesUnordered::new();
-
-                for _ in 0..rounds {
-                    exclusives.push(addr.send(ExclusiveMessage));
-                    concurrents.push(addr.send(ConcurrentMessage));
                 }
+            });
 
-                let start = Instant::now();
-                while exclusives.next().await.is_some() {}
-                timing.add_exclusive(Instant::now().duration_since(start));
+            let mut exclusives = FuturesUnordered::new();
+            let mut concurrents = FuturesUnordered::new();
 
-                let start = Instant::now();
-                while concurrents.next().await.is_some() {}
-                timing.add_concurrent(Instant::now().duration_since(start));
+            for _ in 0..rounds {
+                exclusives.push(addr.send(ExclusiveMessage));
+                concurrents.push(addr.send(ConcurrentMessage));
             }
 
-            timing.print_res();
+            let start = Instant::now();
+            while exclusives.next().await.is_some() {}
+            timing.add_exclusive(Instant::now().duration_since(start));
+
+            let start = Instant::now();
+            while concurrents.next().await.is_some() {}
+            timing.add_concurrent(Instant::now().duration_since(start));
         }
+
+        timing.print_res();
+    });
+
+    actix::System::new("actix").block_on(async move {
+        use actix_actor::*;
+        println!("starting benchmark actix");
+
+        let mut timing = Timing::new();
+
+        for _ in 0..10 {
+            let file = File::open(file_path.clone()).await.unwrap();
+            let heap_alloc = heap_alloc;
+            let addr = ActixActor::create(move |_| ActixActor {
+                file: LocalMutex::new(file, false),
+                heap_alloc,
+            });
+
+            let mut exclusives = FuturesUnordered::new();
+            let mut concurrents = FuturesUnordered::new();
+
+            for _ in 0..rounds {
+                exclusives.push(addr.send(ExclusiveMessage));
+                concurrents.push(addr.send(ConcurrentMessage));
+            }
+
+            let start = Instant::now();
+            while exclusives.next().await.is_some() {}
+            timing.add_exclusive(Instant::now().duration_since(start));
+
+            let start = Instant::now();
+            while concurrents.next().await.is_some() {}
+            timing.add_concurrent(Instant::now().duration_since(start));
+        }
+
+        timing.print_res();
     });
 }
 

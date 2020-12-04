@@ -112,6 +112,7 @@ doc_comment::doctest!("../README.md");
 
 #[cfg(test)]
 mod test {
+    use core::future::Ready;
     use core::pin::Pin;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use core::task::{Context as StdContext, Poll};
@@ -420,7 +421,7 @@ mod test {
 
     impl Handler<TestTimeoutMessage> for TestActor {
         type Future<'res> = impl Future<Output = ()> + 'res;
-        type FutureWait<'res> = impl Future<Output = ()> + 'res;
+        type FutureWait<'res> = Ready<()>;
 
         fn handle<'act, 'ctx, 'res>(
             &'act self,
@@ -443,7 +444,7 @@ mod test {
             'act: 'res,
             'ctx: 'res,
         {
-            async { unimplemented!() }
+            unimplemented!()
         }
     }
 
@@ -455,7 +456,7 @@ mod test {
 
     impl Handler<TestDelayMessage> for TestActor {
         type Future<'res> = impl Future<Output = ContextJoinHandle> + 'res;
-        type FutureWait<'res> = impl Future<Output = ContextJoinHandle> + 'res;
+        type FutureWait<'res> = Ready<ContextJoinHandle>;
 
         fn handle<'act, 'ctx, 'res>(
             &'act self,
@@ -484,7 +485,7 @@ mod test {
             'act: 'res,
             'ctx: 'res,
         {
-            async { unimplemented!() }
+            unimplemented!()
         }
     }
 
@@ -493,8 +494,8 @@ mod test {
     message!(TestPanicMsg, ());
 
     impl Handler<TestPanicMsg> for TestActor {
-        type Future<'res> = impl Future<Output = ()> + 'res;
-        type FutureWait<'res> = impl Future<Output = ()> + 'res;
+        type Future<'res> = Ready<()>;
+        type FutureWait<'res> = Ready<()>;
 
         fn handle<'act, 'ctx, 'res>(
             &'act self,
@@ -505,9 +506,7 @@ mod test {
             'act: 'res,
             'ctx: 'res,
         {
-            async {
-                panic!("This is a purpose panic to test actor recovery");
-            }
+            panic!("This is a purpose panic to test actor recovery")
         }
 
         fn handle_wait<'act, 'ctx, 'res>(
@@ -519,9 +518,7 @@ mod test {
             'act: 'res,
             'ctx: 'res,
         {
-            async {
-                panic!("This is a purpose panic to test actor recovery");
-            }
+            panic!("This is a purpose panic to test actor recovery")
         }
     }
 }

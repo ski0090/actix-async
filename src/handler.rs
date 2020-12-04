@@ -1,4 +1,4 @@
-use core::future::Future;
+use core::future::{Future, Ready};
 use core::mem::transmute;
 
 use alloc::boxed::Box;
@@ -15,7 +15,7 @@ use crate::util::futures::LocalBoxFuture;
 /// #![allow(incomplete_features)]
 /// #![feature(generic_associated_types, type_alias_impl_trait)]
 ///
-/// use std::future::Future;
+/// use std::future::{Future, Ready};
 ///
 /// use actix_async::prelude::*;
 ///
@@ -28,7 +28,7 @@ use crate::util::futures::LocalBoxFuture;
 /// // impl boxed future manually without async_trait.
 /// impl Handler<TestMessage> for TestActor {
 ///     type Future<'res> = impl Future<Output = ()> + 'res;
-///     type FutureWait<'res> = impl Future<Output = ()> + 'res;
+///     type FutureWait<'res> = Ready<()>;
 ///     
 ///     fn handle<'act, 'ctx, 'res>(
 ///         &'act self,
@@ -55,7 +55,7 @@ use crate::util::futures::LocalBoxFuture;
 ///         'act: 'res,
 ///         'ctx: 'res
 ///     {
-///         async { unimplemented!() }
+///         unimplemented!()
 ///     }
 /// }
 /// ```
@@ -93,7 +93,7 @@ where
     R: Send + 'static,
 {
     type Future<'res> = impl Future<Output = R> + 'res;
-    type FutureWait<'res> = impl Future<Output = R> + 'res;
+    type FutureWait<'res> = Self::Future<'res>;
 
     fn handle<'act, 'ctx, 'res>(
         &'act self,
@@ -127,7 +127,7 @@ where
     F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
-    type Future<'res> = impl Future<Output = R> + 'res;
+    type Future<'res> = Ready<R>;
     type FutureWait<'res> = impl Future<Output = R> + 'res;
 
     fn handle<'act, 'ctx, 'res>(
@@ -139,7 +139,7 @@ where
         'act: 'res,
         'ctx: 'res,
     {
-        async { unimplemented!("Handler::handle can not be called on FunctionMutMessage") }
+        unimplemented!("Handler::handle can not be called on FunctionMutMessage")
     }
 
     fn handle_wait<'act, 'ctx, 'res>(

@@ -207,7 +207,15 @@ impl<A: Actor> Future for SupervisorFut<A> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        match Pin::new(self.fut.as_mut().unwrap()).poll(cx) {
+        // SAFETY:
+        // ContextFuture<A> is only PhantomPinned to make sure it's not moved.
+        // Supervisor does not move it until it goes into Drop phase.
+        let fut = unsafe {
+            let fut = self.as_mut().get_unchecked_mut().fut.as_mut().unwrap();
+            Pin::new_unchecked(fut)
+        };
+
+        match fut.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(()) if self.fut.as_ref().unwrap().is_running() => self.poll(cx),
             Poll::Ready(()) => Poll::Ready(()),
@@ -222,6 +230,9 @@ impl<A: Actor> ContextFuture<A> {
 
     #[cold]
     fn clear_cache(&mut self) {
+        // SAFETY:
+        // CacheRef and CacheMut have reference of Context's act and ctx field.
+        // It's important to drop all of them when recovering from panic.
         self.cache_mut.clear();
         self.cache_ref.clear();
     }

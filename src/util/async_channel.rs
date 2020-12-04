@@ -251,7 +251,10 @@ impl<T> Stream for Receiver<T> {
         loop {
             // If this stream is listening for events, first wait for a notification.
             if let Some(listener) = self.listener.as_mut() {
-                futures_core::ready!(Pin::new(listener).poll(cx));
+                match Pin::new(listener).poll(cx) {
+                    Poll::Ready(()) => {}
+                    Poll::Pending => return Poll::Pending,
+                }
                 self.listener = None;
             }
 

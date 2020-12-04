@@ -11,6 +11,8 @@ pub(crate) mod channel {
 pub(crate) mod futures;
 
 pub(crate) mod smart_pointer {
-    pub(crate) type RefCounter<T> = alloc::sync::Arc<T>;
-    pub(crate) type WeakRefCounter<T> = alloc::sync::Weak<T>;
+    use alloc::sync::{Arc, Weak};
+
+    pub(crate) type RefCounter<T> = Arc<T>;
+    pub(crate) type WeakRefCounter<T> = Weak<T>;
 }
