@@ -36,3 +36,8 @@ futures-util = { version = "0.3.8", default-features = false, features = ["alloc
 futures-intrusive = { version = "^0.4", default-features = false }
 tokio = { version = "0.3.4", features = ["full"] }
 tokio02 = { package = "tokio", version = "0.2.23", features = ["full"] }
+
+[profile.bench]
+lto = true
+opt-level = 3
+codegen-units = 1

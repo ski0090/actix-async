@@ -1,7 +1,7 @@
 use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::marker::{PhantomData, PhantomPinned};
-use core::mem::{swap, transmute};
+use core::mem::swap;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::read;
@@ -177,8 +177,8 @@ impl<A: Actor> Context<A> {
     /// message!(StreamMessage, ());
     ///
     /// impl Handler<StreamMessage> for StreamActor {
-    ///     type Future<'res> = impl Future<Output = ()> + 'res;
-    ///     type FutureWait<'res> = impl Future<Output = ()> + 'res;
+    ///     type Future<'res> = impl Future<Output = ()>;
+    ///     type FutureWait<'res> = impl Future<Output = ()>;
     ///
     ///     fn handle<'act, 'ctx, 'res>(
     ///         &'act self,
@@ -289,8 +289,23 @@ impl<A: Actor> CacheRef<A> {
     }
 
     #[inline(always)]
-    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: &Context<A>) {
-        self.push(msg.handle(act, ctx));
+    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, cap: &Capsule<A>) {
+        /*
+            SAFETY:
+            `MessageHandler::handle`can not tie to actor and context's lifetime.
+            The reason is it would assume the boxed futures would live as long as the
+            actor and context. Making it impossible to mutably borrow them again from
+            this point forward.
+
+            future transmute to static lifetime must be polled before next
+            ContextWithActor.cache_mut is polled.
+        */
+        unsafe {
+            let act = cap.act_static();
+            let ctx = cap.ctx_static();
+
+            self.push(msg.handle(act, ctx));
+        }
     }
 
     #[inline(always)]
@@ -333,17 +348,29 @@ impl CacheMut {
     fn add_exclusive<A: Actor>(
         &mut self,
         mut msg: Box<dyn MessageHandler<A>>,
-        act: &mut A,
-        ctx: &mut Context<A>,
+        cap: &mut Capsule<A>,
     ) {
-        self.0 = Some(msg.handle_wait(act, ctx));
+        /*
+            SAFETY:
+            `MessageHandler::handle_wait`can not tie to actor and context's lifetime.
+            The reason is it would assume the boxed futures would live as long as the
+            actor and context. Making it impossible to mutably borrow them again from
+            this point forward.
+
+            future transmute to static lifetime must be polled only when
+            ContextWithActor.cache_ref is empty.
+        */
+        unsafe {
+            let act = cap.act_mut_static();
+            let ctx = cap.ctx_mut_static();
+            self.0 = Some(msg.handle_wait(act, ctx));
+        }
     }
 }
 
 pin_project_lite::pin_project! {
     pub(crate) struct ContextFuture<A: Actor> {
-        act: A,
-        pub(crate) ctx: Context<A>,
+        pub(crate) cap: Capsule<A>,
         pub(crate) cache_mut: CacheMut,
         pub(crate) cache_ref: CacheRef<A>,
         future_cache: Vec<FutureMessage<A>>,
@@ -363,12 +390,73 @@ enum ContextState {
     Stopping,
 }
 
+pub struct Capsule<A: Actor> {
+    act: *mut A,
+    ctx: *mut Context<A>,
+}
+
+impl<A: Actor> Drop for Capsule<A> {
+    fn drop(&mut self) {
+        // SAFETY:
+        // convert back to box for freeing the memory.
+        // at this point all futures referencing actor and context are resolved or dropped.
+        unsafe {
+            Box::from_raw(self.act);
+            Box::from_raw(self.ctx);
+        };
+    }
+}
+
+impl<A: Actor> Capsule<A> {
+    fn new(act: A, ctx: Context<A>) -> Self {
+        let act = Box::into_raw(Box::new(act));
+        let ctx = Box::into_raw(Box::new(ctx));
+        Self { act, ctx }
+    }
+
+    pub(crate) fn ctx_mut(&mut self) -> &mut Context<A> {
+        // SAFETY:
+        // borrow self with mut so this is safe.
+        unsafe { &mut *self.ctx }
+    }
+
+    pub(crate) fn ctx(&self) -> &Context<A> {
+        // SAFETY:
+        // borrow self so this is safe.
+        unsafe { &*self.ctx }
+    }
+
+    // SAFETY:
+    // caller must make sure the lifetime does not violate the borrow checker rule.
+    unsafe fn act_mut_static(&mut self) -> &'static mut A {
+        &mut *self.act
+    }
+
+    // SAFETY:
+    // caller must make sure the lifetime does not violate the borrow checker rule.
+    unsafe fn ctx_mut_static(&mut self) -> &'static mut Context<A> {
+        &mut *self.ctx
+    }
+
+    // SAFETY:
+    // caller must make sure the lifetime does not violate the borrow checker rule.
+    unsafe fn act_static(&self) -> &'static A {
+        &*self.act
+    }
+
+    // SAFETY:
+    // caller must make sure the lifetime does not violate the borrow checker rule.
+    unsafe fn ctx_static(&self) -> &'static Context<A> {
+        &*self.ctx
+    }
+}
+
 impl<A: Actor> ContextFuture<A> {
     #[inline(always)]
     pub(crate) fn new(act: A, ctx: Context<A>) -> Self {
+        let cap = Capsule::new(act, ctx);
         Self {
-            act,
-            ctx,
+            cap,
             cache_mut: CacheMut::new(),
             cache_ref: CacheRef::new(),
             future_cache: Vec::with_capacity(8),
@@ -435,9 +523,9 @@ impl<A: Actor> ContextFuture<A> {
         let this = self.as_mut().project();
 
         // If context is stopped we stop dealing with future and stream messages.
-        if this.ctx.is_running() {
-            this.future_cache.merge(this.ctx);
-            this.stream_cache.merge(this.ctx);
+        if this.cap.ctx_mut().is_running() {
+            this.future_cache.merge(this.cap.ctx_mut());
+            this.stream_cache.merge(this.cap.ctx_mut());
 
             // poll future messages
             let mut i = 0;
@@ -455,10 +543,10 @@ impl<A: Actor> ContextFuture<A> {
                         match msg {
                             Some(ActorMessage::Ref(msg)) => {
                                 *this.poll_concurrent = true;
-                                this.cache_ref.add_concurrent(msg, this.act, this.ctx);
+                                this.cache_ref.add_concurrent(msg, this.cap);
                             }
                             Some(ActorMessage::Mut(msg)) => {
-                                this.cache_mut.add_exclusive(msg, this.act, this.ctx);
+                                this.cache_mut.add_exclusive(msg, this.cap);
                                 return self.poll_exclusive(cx);
                             }
                             // Message is canceled by ContextJoinHandle. Ignore it.
@@ -477,10 +565,10 @@ impl<A: Actor> ContextFuture<A> {
                     Poll::Ready(Some(ActorMessage::Ref(msg))) => {
                         // when adding new concurrent message we always want an extra poll to register them.
                         *this.poll_concurrent = true;
-                        this.cache_ref.add_concurrent(msg, this.act, this.ctx);
+                        this.cache_ref.add_concurrent(msg, this.cap);
                     }
                     Poll::Ready(Some(ActorMessage::Mut(msg))) => {
-                        this.cache_mut.add_exclusive(msg, this.act, this.ctx);
+                        this.cache_mut.add_exclusive(msg, this.cap);
                         return self.poll_exclusive(cx);
                     }
                     // stream is either canceled by ContextJoinHandle or finished.
@@ -508,16 +596,17 @@ impl<A: Actor> ContextFuture<A> {
 
         // actively drain receiver channel for incoming messages.
         loop {
-            match Pin::new(&mut this.ctx.rx).poll_next(cx) {
+            match Pin::new(&mut this.cap.ctx_mut().rx).poll_next(cx) {
                 // new concurrent message. add it to cache_ref and continue.
                 Poll::Ready(Some(ActorMessage::Ref(msg))) => {
                     *this.poll_concurrent = true;
-                    this.cache_ref.add_concurrent(msg, this.act, this.ctx);
+
+                    this.cache_ref.add_concurrent(msg, this.cap);
                 }
                 // new exclusive message. add it to cache_mut. No new messages should
                 // be accepted until this one is resolved.
                 Poll::Ready(Some(ActorMessage::Mut(msg))) => {
-                    this.cache_mut.add_exclusive(msg, this.act, this.ctx);
+                    this.cache_mut.add_exclusive(msg, this.cap);
                     return self.poll_exclusive(cx);
                 }
                 // stopping messages received.
@@ -525,7 +614,7 @@ impl<A: Actor> ContextFuture<A> {
                     // a oneshot sender to to notify the caller shut down is complete.
                     *this.drop_notify = Some(notify);
                     // stop context which would close the channel.
-                    this.ctx.stop();
+                    this.cap.ctx_mut().stop();
                     // goes to stopping state if it's a force shut down.
                     // otherwise keep the loop until we drain the channel.
                     if let ActorState::Stop = state {
@@ -536,7 +625,7 @@ impl<A: Actor> ContextFuture<A> {
                 // channel is closed
                 Poll::Ready(None) => {
                     // stop context just in case.
-                    this.ctx.stop();
+                    this.cap.ctx_mut().stop();
                     // have new concurrent message. poll another round.
                     return if *this.poll_concurrent {
                         self.poll_concurrent(cx)
@@ -564,12 +653,12 @@ impl<A: Actor> ContextFuture<A> {
     }
 
     fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
-        let mut this = self.as_mut().project();
+        let this = self.as_mut().project();
         match this.poll_task.as_mut() {
             Some(task) => match task.as_mut().poll(cx) {
                 Poll::Ready(_) => {
                     *this.poll_task = None;
-                    this.ctx.set_running();
+                    this.cap.ctx_mut().set_running();
                     *this.state = ContextState::Running;
                     self.poll_concurrent(cx)
                 }
@@ -578,9 +667,12 @@ impl<A: Actor> ContextFuture<A> {
             None => {
                 // SAFETY:
                 // Self reference is needed.
-                // on_start transmute to static lifetime must be resolved before dropping
-                // or move Context and Actor.
-                let task = unsafe { transmute(this.act.on_start(&mut this.ctx)) };
+                // Task would be destroyed if ContextFut goes out of scope.
+                let task = unsafe {
+                    this.cap
+                        .act_mut_static()
+                        .on_start(this.cap.ctx_mut_static())
+                };
                 *this.poll_task = Some(task);
                 self.poll_start(cx)
             }
@@ -588,7 +680,7 @@ impl<A: Actor> ContextFuture<A> {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
-        let mut this = self.as_mut().project();
+        let this = self.as_mut().project();
         match this.poll_task.as_mut() {
             Some(task) => match task.as_mut().poll(cx) {
                 Poll::Ready(_) => {
@@ -603,9 +695,8 @@ impl<A: Actor> ContextFuture<A> {
             None => {
                 // SAFETY:
                 // Self reference is needed.
-                // on_stop transmute to static lifetime must be resolved before dropping
-                // or move Context and Actor.
-                let task = unsafe { transmute(this.act.on_stop(&mut this.ctx)) };
+                // Task would be destroyed if ContextFut goes out of scope.
+                let task = unsafe { this.cap.act_mut_static().on_stop(this.cap.ctx_mut_static()) };
                 *this.poll_task = Some(task);
                 self.poll_close(cx)
             }

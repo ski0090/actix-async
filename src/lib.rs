@@ -21,8 +21,8 @@
 //!
 //! // impl handler trait for message and actor types.
 //! impl Handler<TestMessage> for TestActor {
-//!     type Future<'res> = impl Future<Output = u32> + 'res;
-//!     type FutureWait<'res> = impl Future<Output = u32> + 'res;
+//!     type Future<'res> = impl Future<Output = u32>;
+//!     type FutureWait<'res> = impl Future<Output = u32>;
 //!
 //!     // concurrent message handler where actor state and context are borrowed immutably.
 //!     fn handle<'act, 'ctx, 'res>(
@@ -330,8 +330,8 @@ mod test {
     message!(TestMessage, usize);
 
     impl Handler<TestMessage> for TestActor {
-        type Future<'res> = impl Future<Output = usize> + 'res;
-        type FutureWait<'res> = impl Future<Output = usize> + 'res;
+        type Future<'res> = impl Future<Output = usize>;
+        type FutureWait<'res> = impl Future<Output = usize>;
 
         fn handle<'act, 'ctx, 'res>(
             &'act self,
@@ -363,8 +363,8 @@ mod test {
     message!(TestIntervalMessage, (Arc<AtomicUsize>, ContextJoinHandle));
 
     impl Handler<TestIntervalMessage> for TestActor {
-        type Future<'res> = impl Future<Output = (Arc<AtomicUsize>, ContextJoinHandle)> + 'res;
-        type FutureWait<'res> = impl Future<Output = (Arc<AtomicUsize>, ContextJoinHandle)> + 'res;
+        type Future<'res> = impl Future<Output = (Arc<AtomicUsize>, ContextJoinHandle)>;
+        type FutureWait<'res> = impl Future<Output = (Arc<AtomicUsize>, ContextJoinHandle)>;
 
         fn handle<'act, 'ctx, 'res>(
             &'act self,
@@ -420,7 +420,7 @@ mod test {
     message!(TestTimeoutMessage, ());
 
     impl Handler<TestTimeoutMessage> for TestActor {
-        type Future<'res> = impl Future<Output = ()> + 'res;
+        type Future<'res> = impl Future<Output = ()>;
         type FutureWait<'res> = Ready<()>;
 
         fn handle<'act, 'ctx, 'res>(
@@ -455,7 +455,7 @@ mod test {
     }
 
     impl Handler<TestDelayMessage> for TestActor {
-        type Future<'res> = impl Future<Output = ContextJoinHandle> + 'res;
+        type Future<'res> = impl Future<Output = ContextJoinHandle>;
         type FutureWait<'res> = Ready<ContextJoinHandle>;
 
         fn handle<'act, 'ctx, 'res>(

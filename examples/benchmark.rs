@@ -51,7 +51,7 @@ mod actix_async_actor {
     message!(ExclusiveMessage, ());
 
     impl Handler<ExclusiveMessage> for ActixAsyncActor {
-        type Future<'a> = impl Future<Output = ()> + 'a;
+        type Future<'a> = impl Future<Output = ()>;
         type FutureWait<'a> = Self::Future<'a>;
 
         fn handle<'a, 'c, 'r>(
@@ -207,6 +207,8 @@ fn main() {
 
     let file_path = collect_arg(&mut rounds, &mut heap_alloc);
 
+    tokio_raw::benchmark(heap_alloc, file_path.clone(), rounds);
+
     actix_rt::System::new("actix-async").block_on(async {
         use actix_async_actor::*;
         println!("starting benchmark actix-async");
@@ -275,6 +277,127 @@ fn main() {
 
         timing.print_res();
     });
+}
+
+mod tokio_raw {
+    use tokio::fs::File;
+    use tokio::io::AsyncReadExt;
+    use tokio::sync::{mpsc, oneshot};
+    use tokio::task;
+
+    use super::*;
+    use async_std::task::JoinHandle;
+    use futures_intrusive::sync::{GenericMutex, LocalMutex};
+    use futures_intrusive::NoopLock;
+
+    enum Msg {
+        Concurrent(ConcurrentMessage, oneshot::Sender<()>),
+        Exclusive(ExclusiveMessage, oneshot::Sender<()>),
+    }
+
+    pub fn benchmark(heap_alloc: bool, file_path: String, rounds: usize) {
+        let local = tokio::task::LocalSet::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        runtime.block_on(local.run_until(async {
+            println!("starting benchmark tokio raw channel");
+
+            let (tx, mut rx) = mpsc::channel(256);
+
+            task::spawn_local(async move {
+                let file = LocalMutex::new(File::open(file_path.as_str()).await.unwrap(), false);
+
+                // transmute is safe as we collect all spawn handles for tasks borrow file.
+                // the async block only exit when all the handles are resolved.
+                let file = unsafe {
+                    core::mem::transmute::<_, &'static GenericMutex<NoopLock, File>>(&file)
+                };
+
+                let mut handles = Vec::with_capacity(256);
+
+                let mut exclusive: Option<JoinHandle<()>> = None;
+
+                while let Some(msg) = rx.recv().await {
+                    // clean handles if it goes too big.
+                    if handles.len() == 1024 {
+                        for h in handles.iter_mut() {
+                            let _ = h.await;
+                        }
+                        handles = Vec::with_capacity(256);
+                    }
+                    match msg {
+                        Msg::Concurrent(_, tx) => {
+                            if let Some(h) = exclusive.as_mut() {
+                                h.await;
+                                exclusive = None;
+                            }
+                            handles.push(task::spawn_local(delay(tx)));
+                        }
+                        Msg::Exclusive(_, tx) => {
+                            if let Some(h) = exclusive.as_mut() {
+                                h.await;
+                                exclusive = None;
+                            }
+                            handles.push(task::spawn_local(read_file(heap_alloc, &file, tx)));
+                        }
+                    }
+                }
+
+                for h in handles {
+                    let _ = h.await;
+                }
+            });
+
+            let mut timing = Timing::new();
+
+            for _ in 0..10 {
+                let mut exclusives = FuturesUnordered::new();
+                let mut concurrents = FuturesUnordered::new();
+
+                for _ in 0..rounds {
+                    exclusives.push(async {
+                        let (o_tx, o_rx) = oneshot::channel();
+                        let _ = tx.send(Msg::Exclusive(ExclusiveMessage, o_tx)).await;
+                        o_rx.await
+                    });
+                    concurrents.push(async {
+                        let (o_tx, o_rx) = oneshot::channel();
+                        let _ = tx.send(Msg::Concurrent(ConcurrentMessage, o_tx)).await;
+                        o_rx.await
+                    });
+                }
+
+                let start = Instant::now();
+                while exclusives.next().await.is_some() {}
+                timing.add_exclusive(Instant::now().duration_since(start));
+
+                let start = Instant::now();
+                while concurrents.next().await.is_some() {}
+                timing.add_concurrent(Instant::now().duration_since(start));
+            }
+
+            timing.print_res();
+        }));
+    }
+
+    async fn delay(tx: oneshot::Sender<()>) {
+        actix_rt::time::sleep(Duration::from_millis(1)).await;
+        let _ = tx.send(());
+    }
+
+    async fn read_file(heap_alloc: bool, file: &'static LocalMutex<File>, tx: oneshot::Sender<()>) {
+        if heap_alloc {
+            let mut buffer = Vec::with_capacity(100_0000);
+            let _ = file.lock().await.read(&mut buffer).await.unwrap();
+        } else {
+            let mut buffer = [0u8; 2_048];
+            let _ = file.lock().await.read(&mut buffer).await.unwrap();
+        }
+        let _ = tx.send(());
+    }
 }
 
 struct Timing {

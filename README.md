@@ -28,8 +28,8 @@ message!(TestMessage, u32);
 impl Handler<TestMessage> for TestActor {
     // generic associate type is needed to bind the 'res lifetime.
     // the output of opaque future must match the message! macro of Message type.
-    type Future<'res> = impl Future<Output = u32> + 'res;
-    type FutureWait<'res> = impl Future<Output = u32> + 'res;
+    type Future<'res> = impl Future<Output = u32>;
+    type FutureWait<'res> = impl Future<Output = u32>;
 
     // concurrent message handler where actor state and context are borrowed immutably.
     fn handle<'act, 'ctx, 'res>(

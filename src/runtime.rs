@@ -43,8 +43,8 @@ use core::time::Duration;
 /// message!(TestMessage, usize);
 ///
 /// impl Handler<TestMessage> for AsyncStdActor {
-///     type Future<'res> = impl Future<Output = usize> + 'res;
-///     type FutureWait<'res> = impl Future<Output = usize> + 'res;
+///     type Future<'res> = impl Future<Output = usize>;
+///     type FutureWait<'res> = impl Future<Output = usize>;
 ///
 ///     fn handle<'act, 'ctx, 'res>(
 ///         &'act self,
@@ -75,8 +75,8 @@ use core::time::Duration;
 /// actor!(TokioActor);
 ///
 /// impl Handler<TestMessage> for TokioActor {
-///     type Future<'res> = impl Future<Output = usize> + 'res;
-///     type FutureWait<'res> = impl Future<Output = usize> + 'res;
+///     type Future<'res> = impl Future<Output = usize>;
+///     type FutureWait<'res> = impl Future<Output = usize>;
 ///
 ///     fn handle<'act, 'ctx, 'res>(
 ///         &'act self,

@@ -27,8 +27,8 @@ struct Msg;
 message!(Msg, ());
 
 impl Handler<Msg> for BlockingActor {
-    type Future<'res> = impl Future<Output = ()> + 'res;
-    type FutureWait<'res> = impl Future<Output = ()> + 'res;
+    type Future<'res> = impl Future<Output = ()>;
+    type FutureWait<'res> = impl Future<Output = ()>;
 
     fn handle<'act, 'ctx, 'res>(&'act self, _: Msg, _: &'ctx Context<Self>) -> Self::Future<'res>
     where

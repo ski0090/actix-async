@@ -26,7 +26,7 @@ struct Msg;
 message!(Msg, usize);
 
 impl Handler<Msg> for MyActor {
-    type Future<'a> = impl Future<Output = usize> + 'a;
+    type Future<'a> = impl Future<Output = usize>;
     type FutureWait<'a> = Self::Future<'a>;
 
     fn handle<'act, 'ctx, 'res>(&'act self, _: Msg, _: &'ctx Context<Self>) -> Self::Future<'res>

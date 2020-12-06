@@ -1,5 +1,4 @@
 use core::future::{Future, Ready};
-use core::mem::transmute;
 
 use alloc::boxed::Box;
 
@@ -27,7 +26,7 @@ use crate::util::futures::LocalBoxFuture;
 ///
 /// // impl boxed future manually without async_trait.
 /// impl Handler<TestMessage> for TestActor {
-///     type Future<'res> = impl Future<Output = ()> + 'res;
+///     type Future<'res> = impl Future<Output = ()>;
 ///     type FutureWait<'res> = Ready<()>;
 ///     
 ///     fn handle<'act, 'ctx, 'res>(
@@ -64,8 +63,8 @@ where
     M: Message,
     Self: Actor,
 {
-    type Future<'res>: Future<Output = M::Result> + 'res;
-    type FutureWait<'res>: Future<Output = M::Result> + 'res;
+    type Future<'res>: Future<Output = M::Result>;
+    type FutureWait<'res>: Future<Output = M::Result>;
 
     /// concurrent handler. `Actor` and `Context` are borrowed immutably so it's safe to handle
     /// multiple messages at the same time.
@@ -92,7 +91,7 @@ where
     F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
-    type Future<'res> = impl Future<Output = R> + 'res;
+    type Future<'res> = impl Future<Output = R>;
     type FutureWait<'res> = Self::Future<'res>;
 
     fn handle<'act, 'ctx, 'res>(
@@ -128,7 +127,7 @@ where
     R: Send + 'static,
 {
     type Future<'res> = Ready<R>;
-    type FutureWait<'res> = impl Future<Output = R> + 'res;
+    type FutureWait<'res> = impl Future<Output = R>;
 
     fn handle<'act, 'ctx, 'res>(
         &'act self,
@@ -156,19 +155,13 @@ where
 }
 
 pub trait MessageHandler<A: Actor> {
-    fn handle<'msg, 'act, 'ctx>(
-        &'msg mut self,
-        act: &'act A,
-        ctx: &'ctx Context<A>,
-    ) -> LocalBoxFuture<'static, ()>;
+    fn handle(&mut self, act: &'static A, ctx: &'static Context<A>) -> LocalBoxFuture<'static, ()>;
 
-    fn handle_wait<'msg, 'act, 'ctx>(
-        &'msg mut self,
-        act: &'act mut A,
-        ctx: &'ctx mut Context<A>,
-    ) -> LocalBoxFuture<'static, ()> {
-        self.handle(act, ctx)
-    }
+    fn handle_wait(
+        &mut self,
+        act: &'static mut A,
+        ctx: &'static mut Context<A>,
+    ) -> LocalBoxFuture<'static, ()>;
 }
 
 impl<A, M> MessageHandler<A> for MessageContainer<M>
@@ -176,53 +169,21 @@ where
     A: Actor + Handler<M>,
     M: Message,
 {
-    fn handle<'msg, 'act, 'ctx>(
-        &'msg mut self,
-        act: &'act A,
-        ctx: &'ctx Context<A>,
-    ) -> LocalBoxFuture<'static, ()> {
+    #[inline(always)]
+    fn handle(&mut self, act: &'static A, ctx: &'static Context<A>) -> LocalBoxFuture<'static, ()> {
         let (msg, tx) = self.take();
-
-        /*
-            SAFETY:
-            `MessageHandler::handle`can not tie to actor and context's lifetime.
-            The reason is it would assume the boxed futures would live as long as the
-            actor and context. Making it impossible to mutably borrow them again from
-            this point forward.
-
-            future transmute to static lifetime must be polled before next
-            ContextWithActor.cache_mut is polled.
-        */
-        let act = unsafe { transmute::<_, &'static A>(act) };
-        let ctx = unsafe { transmute::<_, &'static Context<A>>(ctx) };
-
         let fut = act.handle(msg, ctx);
-
         handle(tx, fut)
     }
 
-    fn handle_wait<'msg, 'act, 'ctx>(
-        &'msg mut self,
-        act: &'act mut A,
-        ctx: &'ctx mut Context<A>,
+    #[inline(always)]
+    fn handle_wait(
+        &mut self,
+        act: &'static mut A,
+        ctx: &'static mut Context<A>,
     ) -> LocalBoxFuture<'static, ()> {
         let (msg, tx) = self.take();
-
-        /*
-            SAFETY:
-            `MessageHandler::handle_wait`can not tie to actor and context's lifetime.
-            The reason is it would assume the boxed futures would live as long as the
-            actor and context. Making it impossible to mutably borrow them again from
-            this point forward.
-
-            future transmute to static lifetime must be polled only when
-            ContextWithActor.cache_ref is empty.
-        */
-        let act = unsafe { transmute::<_, &'static mut A>(act) };
-        let ctx = unsafe { transmute::<_, &'static mut Context<A>>(ctx) };
-
         let fut = act.handle_wait(msg, ctx);
-
         handle(tx, fut)
     }
 }

@@ -14,7 +14,7 @@ use crate::util::channel::channel;
 use crate::util::smart_pointer::RefCounter;
 
 /// Supervisor can start multiple instance of same actor on multiple `actix_rt::Arbiter`.
-/// Instances of same actor share the same `Addr` and use would steal work from it for.
+/// Instances of same actor share the same `Addr` and steal work from a mpmc bounded channel.
 ///
 /// It also guards the actor's drop and partially recover them from panic.
 /// (Due to no task level panic catch. Cache futures/streams in `Context` will be cleared after
@@ -73,8 +73,8 @@ impl Supervisor {
     /// message!(Msg, ThreadId);
     ///
     /// impl Handler<Msg> for TestActor {
-    ///     type Future<'res> = impl Future<Output = ThreadId> + 'res;
-    ///     type FutureWait<'res> = impl Future<Output = ThreadId> + 'res;
+    ///     type Future<'res> = impl Future<Output = ThreadId>;
+    ///     type FutureWait<'res> = impl Future<Output = ThreadId>;
     ///
     ///     fn handle<'act, 'ctx, 'res>(
     ///         &'act self,
@@ -225,7 +225,7 @@ impl<A: Actor> Future for SupervisorFut<A> {
 
 impl<A: Actor> ContextFuture<A> {
     pub(crate) fn is_running(&self) -> bool {
-        self.ctx.is_running()
+        self.cap.ctx().is_running()
     }
 
     #[cold]
