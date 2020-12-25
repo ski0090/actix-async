@@ -263,7 +263,7 @@ mod test {
                 cx: &mut StdContext<'_>,
             ) -> Poll<Option<Self::Item>> {
                 let this = self.get_mut();
-                if Pin::new(&mut this.interval).poll_next(cx).is_pending() {
+                if this.interval.poll_tick(cx).is_pending() {
                     return Poll::Pending;
                 }
                 this.state.fetch_add(1, Ordering::SeqCst);
