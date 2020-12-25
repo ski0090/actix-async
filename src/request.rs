@@ -31,11 +31,13 @@ pin_project_lite::pin_project! {
             #[pin]
             fut: Fut,
             rx: Option<OneshotReceiver<R>>,
+            #[pin]
             timeout: RT::Sleep,
-            timeout_response: Option<RT::Sleep>
+            timeout_response: Option<Duration>
         },
         Response {
             rx: OneshotReceiver<R>,
+            #[pin]
             timeout_response: Option<RT::Sleep>
         }
     }
@@ -87,7 +89,7 @@ where
                 fut,
                 rx,
                 timeout,
-                timeout_response: Some(RT::sleep(dur)),
+                timeout_response: Some(dur),
             },
             _ => unreachable!(TIMEOUT_CONFIGURABLE),
         }
@@ -102,43 +104,48 @@ where
     type Output = Result<R, ActixAsyncError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        match self.as_mut().project() {
-            MessageRequestProj::Request {
-                fut,
-                rx,
-                timeout,
-                timeout_response,
-            } => match fut.poll(cx) {
-                Poll::Ready(Ok(())) => {
-                    let rx = rx.take().unwrap();
-                    let timeout_response = timeout_response.take();
+        loop {
+            match self.as_mut().project() {
+                MessageRequestProj::Request {
+                    fut,
+                    rx,
+                    timeout,
+                    timeout_response,
+                } => match fut.poll(cx) {
+                    Poll::Ready(Ok(())) => {
+                        let rx = rx.take().unwrap();
+                        let timeout_response = timeout_response.take().map(RT::sleep);
 
-                    self.set(_MessageRequest::Response {
-                        rx,
-                        timeout_response,
-                    });
-                    self.poll(cx)
-                }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                Poll::Pending => match Pin::new(timeout).poll(cx) {
-                    Poll::Ready(_) => Poll::Ready(Err(ActixAsyncError::SendTimeout)),
-                    Poll::Pending => Poll::Pending,
-                },
-            },
-            MessageRequestProj::Response {
-                rx,
-                timeout_response,
-            } => match Pin::new(rx).poll(cx) {
-                Poll::Ready(res) => Poll::Ready(Ok(res?)),
-                Poll::Pending => {
-                    if let Some(ref mut timeout) = timeout_response {
-                        if Pin::new(timeout).poll(cx).is_ready() {
-                            return Poll::Ready(Err(ActixAsyncError::ReceiveTimeout));
+                        self.set(_MessageRequest::Response {
+                            rx,
+                            timeout_response,
+                        });
+                    }
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Pending => {
+                        return match timeout.poll(cx) {
+                            Poll::Ready(_) => Poll::Ready(Err(ActixAsyncError::SendTimeout)),
+                            Poll::Pending => Poll::Pending,
                         }
                     }
-                    Poll::Pending
+                },
+                MessageRequestProj::Response {
+                    rx,
+                    timeout_response,
+                } => {
+                    return match Pin::new(rx).poll(cx) {
+                        Poll::Ready(res) => Poll::Ready(Ok(res?)),
+                        Poll::Pending => {
+                            if let Some(timeout) = timeout_response.as_pin_mut() {
+                                if timeout.poll(cx).is_ready() {
+                                    return Poll::Ready(Err(ActixAsyncError::ReceiveTimeout));
+                                }
+                            }
+                            Poll::Pending
+                        }
+                    }
                 }
-            },
+            }
         }
     }
 }

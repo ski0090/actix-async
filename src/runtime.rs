@@ -84,7 +84,7 @@ use core::time::Duration;
 /// }
 /// ```
 pub trait RuntimeService: Sized {
-    type Sleep: Future<Output = ()> + Send + Unpin + 'static;
+    type Sleep: Future<Output = ()> + Send + 'static;
 
     fn spawn<F: Future<Output = ()> + 'static>(f: F);
 

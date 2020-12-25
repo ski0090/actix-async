@@ -416,7 +416,8 @@ impl<A: Actor> ContextFuture<A> {
             // poll future messages
             let mut i = 0;
             while i < this.future_cache.len() {
-                match Pin::new(&mut this.future_cache[i]).poll(cx) {
+                // SAFETY: FutureMessage never moved until they are resolved.
+                match unsafe { Pin::new_unchecked(&mut this.future_cache[i]) }.poll(cx) {
                     Poll::Ready(msg) => {
                         // SAFETY:
                         // Vec::swap_remove with no len check and drop of removed
