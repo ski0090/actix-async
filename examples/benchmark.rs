@@ -322,7 +322,7 @@ mod tokio_raw {
 
                 while let Some(msg) = rx.recv().await {
                     // clean handles if it goes too big.
-                    if handles.len() == 1024 {
+                    if handles.len() == 4096 {
                         for h in handles.iter_mut() {
                             let _ = h.await;
                         }

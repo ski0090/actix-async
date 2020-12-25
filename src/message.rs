@@ -163,11 +163,14 @@ where
     }
 }
 
-// message would produced in the future passed to Context<Actor>.
-pub(crate) struct FutureMessage<A: Actor> {
-    delay: <A::Runtime as RuntimeService>::Sleep,
-    handle: Option<OneshotReceiver<()>>,
-    msg: Option<ActorMessage<A>>,
+pin_project_lite::pin_project! {
+    // message would produced in the future passed to Context<Actor>.
+    pub(crate) struct FutureMessage<A: Actor> {
+        #[pin]
+        delay: <A::Runtime as RuntimeService>::Sleep,
+        handle: Option<OneshotReceiver<()>>,
+        msg: Option<ActorMessage<A>>,
+    }
 }
 
 impl<A: Actor> FutureMessage<A> {
@@ -184,19 +187,19 @@ impl<A: Actor> Future for FutureMessage<A> {
     type Output = Option<ActorMessage<A>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
         if let Some(h) = this.handle.as_mut() {
             match Pin::new(h).poll(cx) {
                 // handle canceled. resolve with nothing.
                 Poll::Ready(Ok(())) => return Poll::Ready(None),
                 // handle dropped. the task is now detached.
-                Poll::Ready(Err(_)) => this.handle = None,
+                Poll::Ready(Err(_)) => *this.handle = None,
                 Poll::Pending => {}
             }
         }
 
-        match Pin::new(&mut this.delay).poll(cx) {
+        match this.delay.poll(cx) {
             Poll::Ready(_) => Poll::Ready(Some(this.msg.take().unwrap())),
             Poll::Pending => Poll::Pending,
         }
@@ -206,7 +209,7 @@ impl<A: Actor> Future for FutureMessage<A> {
 // interval message passed to Context<Actor>.
 pub(crate) struct IntervalMessage<A: Actor> {
     dur: Duration,
-    delay: <A::Runtime as RuntimeService>::Sleep,
+    delay: Pin<Box<<A::Runtime as RuntimeService>::Sleep>>,
     handle: Option<OneshotReceiver<()>>,
     msg: ActorMessageClone<A>,
 }
@@ -215,7 +218,7 @@ impl<A: Actor> IntervalMessage<A> {
     pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessageClone<A>) -> Self {
         Self {
             dur,
-            delay: A::sleep(dur),
+            delay: Box::pin(A::sleep(dur)),
             handle: Some(rx),
             msg,
         }
@@ -240,7 +243,7 @@ impl<A: Actor> Stream for IntervalMessage<A> {
 
         match Pin::new(&mut this.delay).poll(cx) {
             Poll::Ready(_) => {
-                this.delay = A::sleep(this.dur);
+                this.delay = Box::pin(A::sleep(this.dur));
                 // wake self one more time to register the new sleep.
                 cx.waker().wake_by_ref();
                 Poll::Ready(Some(this.msg.clone()))

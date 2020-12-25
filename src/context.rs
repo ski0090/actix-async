@@ -414,12 +414,14 @@ impl<A: Actor> Capsule<A> {
         Self { act, ctx }
     }
 
+    #[inline(always)]
     pub(crate) fn ctx_mut(&mut self) -> &mut Context<A> {
         // SAFETY:
         // borrow self with mut so this is safe.
         unsafe { &mut *self.ctx }
     }
 
+    #[inline(always)]
     pub(crate) fn ctx(&self) -> &Context<A> {
         // SAFETY:
         // borrow self so this is safe.
@@ -428,24 +430,28 @@ impl<A: Actor> Capsule<A> {
 
     // SAFETY:
     // caller must make sure the lifetime does not violate the borrow checker rule.
+    #[inline(always)]
     unsafe fn act_mut_static(&mut self) -> &'static mut A {
         &mut *self.act
     }
 
     // SAFETY:
     // caller must make sure the lifetime does not violate the borrow checker rule.
+    #[inline(always)]
     unsafe fn ctx_mut_static(&mut self) -> &'static mut Context<A> {
         &mut *self.ctx
     }
 
     // SAFETY:
     // caller must make sure the lifetime does not violate the borrow checker rule.
+    #[inline(always)]
     unsafe fn act_static(&self) -> &'static A {
         &*self.act
     }
 
     // SAFETY:
     // caller must make sure the lifetime does not violate the borrow checker rule.
+    #[inline(always)]
     unsafe fn ctx_static(&self) -> &'static Context<A> {
         &*self.ctx
     }
@@ -530,7 +536,8 @@ impl<A: Actor> ContextFuture<A> {
             // poll future messages
             let mut i = 0;
             while i < this.future_cache.len() {
-                match Pin::new(&mut this.future_cache[i]).poll(cx) {
+                // SAFETY: FutureMessage are not moved until they are resolved.
+                match unsafe { Pin::new_unchecked(&mut this.future_cache[i]) }.poll(cx) {
                     Poll::Ready(msg) => {
                         // SAFETY:
                         // Vec::swap_remove with no len check and drop of removed
