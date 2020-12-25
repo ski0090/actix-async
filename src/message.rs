@@ -163,20 +163,17 @@ where
     }
 }
 
-pin_project_lite::pin_project! {
-    // message would produced in the future passed to Context<Actor>.
-    pub(crate) struct FutureMessage<A: Actor> {
-        #[pin]
-        delay: <A::Runtime as RuntimeService>::Sleep,
-        handle: Option<OneshotReceiver<()>>,
-        msg: Option<ActorMessage<A>>,
-    }
+// message would produced in the future passed to Context<Actor>.
+pub(crate) struct FutureMessage<A: Actor> {
+    delay: Pin<Box<<A::Runtime as RuntimeService>::Sleep>>,
+    handle: Option<OneshotReceiver<()>>,
+    msg: Option<ActorMessage<A>>,
 }
 
 impl<A: Actor> FutureMessage<A> {
     pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessage<A>) -> Self {
         Self {
-            delay: A::sleep(dur),
+            delay: Box::pin(A::sleep(dur)),
             handle: Some(rx),
             msg: Some(msg),
         }
@@ -187,19 +184,19 @@ impl<A: Actor> Future for FutureMessage<A> {
     type Output = Option<ActorMessage<A>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+        let this = self.get_mut();
 
         if let Some(h) = this.handle.as_mut() {
             match Pin::new(h).poll(cx) {
                 // handle canceled. resolve with nothing.
                 Poll::Ready(Ok(())) => return Poll::Ready(None),
                 // handle dropped. the task is now detached.
-                Poll::Ready(Err(_)) => *this.handle = None,
+                Poll::Ready(Err(_)) => this.handle = None,
                 Poll::Pending => {}
             }
         }
 
-        match this.delay.poll(cx) {
+        match this.delay.as_mut().poll(cx) {
             Poll::Ready(_) => Poll::Ready(Some(this.msg.take().unwrap())),
             Poll::Pending => Poll::Pending,
         }
