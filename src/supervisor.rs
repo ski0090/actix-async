@@ -244,7 +244,7 @@ mod test {
 
     #[test]
     fn supervisor_bound() {
-        fn send_sync_clone<T: Send + Sync + Clone + 'static>() {};
+        fn send_sync_clone<T: Send + Sync + Clone + 'static>() {}
 
         send_sync_clone::<Supervisor>();
     }

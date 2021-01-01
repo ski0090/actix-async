@@ -597,7 +597,8 @@ fn full_fence() {
         // temporary atomic variable and compare-and-exchanging its value. No sane compiler to
         // x86 platforms is going to optimize this away.
         let a = AtomicUsize::new(0);
-        a.compare_and_swap(0, 1, Ordering::SeqCst);
+        // TODO: check if atomic order is corrected.
+        let _ = a.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
     } else {
         fence(Ordering::SeqCst);
     }
@@ -699,7 +700,15 @@ impl Event {
             let new = RefCounter::into_raw(new) as *mut Inner;
 
             // Attempt to replace the null-pointer with the new state pointer.
-            inner = self.inner.compare_and_swap(inner, new, Ordering::AcqRel);
+            // TODO: check if atomic order is corrected.
+            inner =
+                match self
+                    .inner
+                    .compare_exchange(inner, new, Ordering::AcqRel, Ordering::Acquire)
+                {
+                    Ok(x) => x,
+                    Err(x) => x,
+                };
 
             // Check if the old pointer value was indeed null.
             if inner.is_null() {
