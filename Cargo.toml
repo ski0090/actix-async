@@ -25,10 +25,11 @@ futures-core = { version = "0.3.8", default-features = false }
 pin-project-lite = "0.2"
 spin = "0.7.0"
 
-actix-rt = { version = "2.0.0-beta.1", optional = true }
+actix-rt = { version = "2", default-features = false, optional = true }
 
 [dev-dependencies]
 #actix = { git = "https://github.com/actix/actix.git", branch = "atomic-unsafe" }
+actix-rt = { version = "2" }
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.42"
 doc-comment = "0.3.3"

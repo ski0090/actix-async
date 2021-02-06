@@ -137,7 +137,7 @@ pub trait Actor: Sized + 'static {
 
         let tx = Addr::new(tx);
 
-        arb.exec_fn(move || {
+        arb.spawn_fn(move || {
             Self::_start(rx, f);
         });
 

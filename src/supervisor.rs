@@ -22,14 +22,14 @@ use crate::util::smart_pointer::RefCounter;
 ///
 /// *. `Supervisor` is enabled with `actix-rt` feature flag
 pub struct Supervisor {
-    arb: Vec<Arbiter>,
+    arb: RefCounter<[Arbiter]>,
     next: RefCounter<AtomicUsize>,
 }
 
 impl Clone for Supervisor {
     fn clone(&self) -> Self {
         Self {
-            arb: self.arb.to_vec(),
+            arb: self.arb.clone(),
             next: self.next.clone(),
         }
     }
@@ -41,8 +41,12 @@ impl Supervisor {
     ///
     /// *. It's suggested only one `Supervisor` instance is used for the entire program.
     pub fn new(workers: usize) -> Self {
+        let arb = (0..workers)
+            .map(|_| Arbiter::new())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
-            arb: (0..workers).map(|_| Arbiter::new()).collect(),
+            arb: RefCounter::from(arb),
             next: RefCounter::new(AtomicUsize::new(0)),
         }
     }
@@ -137,7 +141,7 @@ impl Supervisor {
             let rx = rx.clone();
             let off = self.next.fetch_add(1, Ordering::Relaxed) % self.arb.len();
 
-            self.arb[off].exec_fn(move || {
+            self.arb[off].spawn_fn(move || {
                 A::spawn(async move {
                     let mut ctx = Context::new(rx);
 
