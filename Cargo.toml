@@ -36,4 +36,3 @@ doc-comment = "0.3.3"
 futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
 futures-intrusive = { version = "^0.4", default-features = false }
 tokio = { version = "1", features = ["full"] }
-tokio02 = { package = "tokio", version = "0.2.23", features = ["full"] }

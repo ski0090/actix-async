@@ -10,7 +10,7 @@ use crate::actor::{Actor, ActorState};
 use crate::handler::{Handler, MessageHandler};
 use crate::runtime::RuntimeService;
 use crate::util::channel::{OneshotReceiver, OneshotSender};
-use crate::util::futures::Stream;
+use crate::util::futures::{ready, Stream};
 use crate::util::smart_pointer::RefCounter;
 
 /// trait define types goes through actor's `Addr` to it's `Handler`
@@ -196,10 +196,10 @@ impl<A: Actor> Future for FutureMessage<A> {
             }
         }
 
-        match this.delay.as_mut().poll(cx) {
-            Poll::Ready(_) => Poll::Ready(Some(this.msg.take().unwrap())),
-            Poll::Pending => Poll::Pending,
-        }
+        this.delay
+            .as_mut()
+            .poll(cx)
+            .map(|_| Some(this.msg.take().unwrap()))
     }
 }
 
@@ -238,15 +238,12 @@ impl<A: Actor> Stream for IntervalMessage<A> {
             }
         }
 
-        match Pin::new(&mut this.delay).poll(cx) {
-            Poll::Ready(_) => {
-                this.delay = Box::pin(A::sleep(this.dur));
-                // wake self one more time to register the new sleep.
-                cx.waker().wake_by_ref();
-                Poll::Ready(Some(this.msg.clone()))
-            }
-            Poll::Pending => Poll::Pending,
-        }
+        ready!(Pin::new(&mut this.delay).poll(cx));
+
+        this.delay = Box::pin(A::sleep(this.dur));
+        // wake self one more time to register the new sleep.
+        cx.waker().wake_by_ref();
+        Poll::Ready(Some(this.msg.clone()))
     }
 }
 
@@ -322,13 +319,12 @@ where
             }
         }
 
-        match this.stream.poll_next(cx) {
-            Poll::Ready(Some(item)) => {
+        match ready!(this.stream.poll_next(cx)) {
+            Some(item) => {
                 let msg = (this.to_msg)(item);
                 Poll::Ready(Some(msg))
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            None => Poll::Ready(None),
         }
     }
 }

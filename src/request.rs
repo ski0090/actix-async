@@ -111,8 +111,8 @@ where
                     rx,
                     timeout,
                     timeout_response,
-                } => match fut.poll(cx) {
-                    Poll::Ready(Ok(())) => {
+                } => match fut.poll(cx)? {
+                    Poll::Ready(()) => {
                         let rx = rx.take().unwrap();
                         let timeout_response = timeout_response.take().map(RT::sleep);
 
@@ -121,12 +121,8 @@ where
                             timeout_response,
                         });
                     }
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => {
-                        return match timeout.poll(cx) {
-                            Poll::Ready(_) => Poll::Ready(Err(ActixAsyncError::SendTimeout)),
-                            Poll::Pending => Poll::Pending,
-                        }
+                        return timeout.poll(cx).map(|_| Err(ActixAsyncError::SendTimeout))
                     }
                 },
                 MessageRequestProj::Response {

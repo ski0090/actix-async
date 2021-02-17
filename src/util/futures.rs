@@ -3,6 +3,6 @@ use core::pin::Pin;
 
 use alloc::boxed::Box;
 
-pub(crate) use futures_core::Stream;
+pub(crate) use futures_core::{ready, Stream};
 
 pub type LocalBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;

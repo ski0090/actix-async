@@ -19,7 +19,7 @@ use crate::message::{
     IntervalMessage, Message, StreamContainer, StreamMessage,
 };
 use crate::util::channel::{oneshot, OneshotReceiver, OneshotSender, Receiver};
-use crate::util::futures::{LocalBoxFuture, Stream};
+use crate::util::futures::{ready, LocalBoxFuture, Stream};
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -528,15 +528,13 @@ impl<A: Actor> ContextFuture<A> {
     fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
         match this.poll_task.as_mut() {
-            Some(task) => match task.as_mut().poll(cx) {
-                Poll::Ready(_) => {
-                    this.poll_task = None;
-                    this.ctx.set_running();
-                    this.state = ContextState::Running;
-                    self.poll_running(cx)
-                }
-                Poll::Pending => Poll::Pending,
-            },
+            Some(task) => {
+                ready!(task.as_mut().poll(cx));
+                this.poll_task = None;
+                this.ctx.set_running();
+                this.state = ContextState::Running;
+                self.poll_running(cx)
+            }
             None => {
                 // SAFETY:
                 // Self reference is needed.
@@ -552,13 +550,11 @@ impl<A: Actor> ContextFuture<A> {
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
         match this.poll_task.as_mut() {
-            Some(task) => match task.as_mut().poll(cx) {
-                Poll::Ready(_) => {
-                    this.poll_task = None;
-                    Poll::Ready(())
-                }
-                Poll::Pending => Poll::Pending,
-            },
+            Some(task) => {
+                ready!(task.as_mut().poll(cx));
+                this.poll_task = None;
+                Poll::Ready(())
+            }
             None => {
                 // SAFETY:
                 // Self reference is needed.
