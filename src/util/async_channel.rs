@@ -875,6 +875,7 @@ struct Entry {
 }
 
 struct List {
+    #[allow(dead_code)]
     head: Option<NonNull<Entry>>,
     tail: Option<NonNull<Entry>>,
     start: Option<NonNull<Entry>>,

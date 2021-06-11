@@ -5,11 +5,8 @@ authors = ["fakeshadow <24548779@qq.com>"]
 edition = "2018"
 
 [features]
-default = ["actix-rt"]
-
-[[example]]
-name = "benchmark"
-path = "./examples/benchmark.rs"
+default = ["tokio-rt"]
+tokio-rt = ["tokio/rt", "tokio/time"]
 
 [[example]]
 name = "concurrency"
@@ -21,15 +18,12 @@ path = "./examples/closure.rs"
 
 [dependencies]
 cache-padded = "1.1.1"
-futures-core = { version = "0.3.8", default-features = false }
-pin-project-lite = "0.2"
+futures-core = { version = "0.3", default-features = false }
+pin-project-lite = "0.2.6"
 spin = "0.7.0"
-
-actix-rt = { version = "2", default-features = false, optional = true }
+tokio = { version = "1.6", optional = true }
 
 [dev-dependencies]
-#actix = { git = "https://github.com/actix/actix.git", branch = "atomic-unsafe" }
-actix-rt = { version = "2" }
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.42"
 doc-comment = "0.3.3"

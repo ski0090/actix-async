@@ -90,28 +90,3 @@ pub trait RuntimeService: Sized {
 
     fn sleep(dur: Duration) -> Self::Sleep;
 }
-
-#[cfg(feature = "actix-rt")]
-pub mod default_rt {
-    use super::*;
-
-    /// default runtime(tokio current thread runtime).
-    #[allow(dead_code)]
-    pub type ActixRuntime = actix_rt::Runtime;
-
-    impl RuntimeService for ActixRuntime {
-        type Sleep = actix_rt::time::Sleep;
-
-        #[inline]
-        fn spawn<F: Future + 'static>(f: F) {
-            actix_rt::spawn(async move {
-                f.await;
-            });
-        }
-
-        #[inline]
-        fn sleep(dur: Duration) -> Self::Sleep {
-            actix_rt::time::sleep(dur)
-        }
-    }
-}

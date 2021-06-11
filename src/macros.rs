@@ -1,9 +1,9 @@
+#[cfg(feature = "tokio-rt")]
 #[macro_export]
-#[cfg(feature = "actix-rt")]
 macro_rules! actor {
     ($ty: ty) => {
         impl Actor for $ty {
-            type Runtime = actix_async::prelude::ActixRuntime;
+            type Runtime = actix_async::prelude::TokioRuntime;
         }
     };
 }

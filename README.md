@@ -33,24 +33,26 @@ impl Handler<TestMessage> for TestActor {
     }
 }
 
-#[actix_rt::main]
+#[tokio::main]
 async fn main() {
-    // construct actor
-    let actor = TestActor;
+    tokio::task::LocalSet::new().run_until(async {
+        // construct actor
+        let actor = TestActor;
 
-    // start actor and get address
-    let address = actor.start();
+        // start actor and get address
+        let address = actor.start();
 
-    // send concurrent message with address
-    let res: Result<u32, ActixAsyncError> = address.send(TestMessage).await;
+        // send concurrent message with address
+        let res: Result<u32, ActixAsyncError> = address.send(TestMessage).await;
 
-    // got result
-    assert_eq!(996, res.unwrap());
+        // got result
+        assert_eq!(996, res.unwrap());
 
-    // send exclusive message with address
-    let res = address.wait(TestMessage).await.unwrap();
+        // send exclusive message with address
+        let res = address.wait(TestMessage).await.unwrap();
 
-    // got result
-    assert_eq!(251, res);
+        // got result
+        assert_eq!(251, res);
+    }).await
 }
 ```

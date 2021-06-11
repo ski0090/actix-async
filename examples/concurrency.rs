@@ -5,10 +5,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use actix_async::prelude::*;
-use actix_rt::time::sleep;
 use futures_intrusive::sync::LocalMutex;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use tokio::time::sleep;
 
 // use smart pointers wrapping your actor state for mutation and/or share purpose.
 struct MyActor {
@@ -38,7 +38,7 @@ impl Handler<Msg> for MyActor {
 
         // Rc can be cloned and used in spawned async tasks.
         let state = self.state_shared.clone();
-        actix_rt::spawn(async move {
+        tokio::task::spawn_local(async move {
             sleep(Duration::from_millis(1)).await;
             drop(state);
         });
@@ -61,7 +61,7 @@ impl Handler<Msg> for MyActor {
     }
 }
 
-#[actix_rt::main]
+#[tokio::main]
 async fn main() {
     let act = MyActor {
         state_mut: RefCell::new(0),

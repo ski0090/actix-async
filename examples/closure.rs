@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use actix_async::prelude::*;
-use actix_rt::time::sleep;
 use futures_util::FutureExt;
+use tokio::time::sleep;
 
 /*
     It's possible to use actix-async without Message and Handler impl.
@@ -33,7 +33,7 @@ impl ClosureActor {
     }
 }
 
-#[actix_rt::main]
+#[tokio::main]
 async fn main() {
     let actor = ClosureActor(0);
     let addr = actor.start();

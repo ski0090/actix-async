@@ -76,25 +76,27 @@ pub trait Actor: Sized + 'static {
     ///     }
     /// }
     ///
-    /// #[actix_rt::main]
+    /// #[tokio::main]
     /// async fn main() {
-    ///     let addr = TestActor::create_async(|ctx| {
-    ///         // *. notice context can not move to async block. so you have to use it from
-    ///         // outside if you would.
-    ///         let _ctx = ctx;
-    ///         async {
-    ///             // run async code
-    ///             actix_rt::time::sleep(Duration::from_secs(1)).await;
-    ///             // return an instance of actor.
-    ///             TestActor
-    ///         }   
-    ///     });
+    ///     tokio::task::LocalSet::new().run_until(async {
+    ///         let addr = TestActor::create_async(|ctx| {
+    ///             // *. notice context can not move to async block. so you have to use it from
+    ///             // outside if you would.
+    ///             let _ctx = ctx;
+    ///             async {
+    ///                 // run async code
+    ///                 tokio::time::sleep(Duration::from_secs(1)).await;
+    ///                 // return an instance of actor.
+    ///                 TestActor
+    ///             }
+    ///         });
     ///
-    ///     // run async closure with actor and it's context.
-    ///     let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
-    ///     assert_eq!(996, res.unwrap());
+    ///         // run async closure with actor and it's context.
+    ///         let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
+    ///         assert_eq!(996, res.unwrap());
+    ///     })
+    ///     .await
     /// }
-    ///
     /// ```
     fn create_async<F, Fut>(f: F) -> Addr<Self>
     where
@@ -106,40 +108,6 @@ pub trait Actor: Sized + 'static {
         let tx = Addr::new(tx);
 
         Self::_start(rx, f);
-
-        tx
-    }
-
-    /// create actor with closure and start it in the given arbiter
-    ///
-    /// similar to how `Actor::create` work. The only difference as the creation would happen on
-    /// the arbiter reference you passed in so the construct closure must be bound to `Send`
-    #[cfg(feature = "actix-rt")]
-    fn start_in_arbiter<F>(arb: &actix_rt::Arbiter, f: F) -> Addr<Self>
-    where
-        F: FnOnce(&mut Context<Self>) -> Self + Send + 'static,
-    {
-        Self::start_async_in_arbiter(arb, |ctx| ready(f(ctx)))
-    }
-
-    /// create actor with async closure and start it in the given arbiter
-    ///
-    /// similar to how `Actor::create_async` work. The only difference as the creation would happen
-    /// on the arbiter reference you passed in so the construct async closure must be bound to
-    /// `Send`
-    #[cfg(feature = "actix-rt")]
-    fn start_async_in_arbiter<F, Fut>(arb: &actix_rt::Arbiter, f: F) -> Addr<Self>
-    where
-        F: FnOnce(&mut Context<Self>) -> Fut + Send + 'static,
-        Fut: Future<Output = Self>,
-    {
-        let (tx, rx) = channel(Self::size_hint());
-
-        let tx = Addr::new(tx);
-
-        arb.spawn_fn(move || {
-            Self::_start(rx, f);
-        });
 
         tx
     }

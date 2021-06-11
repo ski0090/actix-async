@@ -1,10 +1,9 @@
 use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::marker::PhantomData;
-use core::mem::{swap, transmute};
+use core::mem::transmute;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
-use core::ptr::read;
 use core::task::{Context as StdContext, Poll};
 use core::time::Duration;
 
@@ -183,12 +182,15 @@ impl<A: Actor> Context<A> {
     ///     }
     /// }
     ///
-    /// #[actix_rt::main]
+    /// #[tokio::main]
     /// async fn main() {
-    ///     let address = StreamActor::create(|ctx| {
-    ///         ctx.add_stream(once(async { StreamMessage }));
-    ///         StreamActor
-    ///     });
+    ///     tokio::task::LocalSet::new().run_until(async {
+    ///         let address = StreamActor::create(|ctx| {
+    ///             ctx.add_stream(once(async { StreamMessage }));
+    ///             StreamActor
+    ///         });
+    ///     })
+    ///     .await
     /// }
     /// ```
     pub fn add_stream<S>(&self, stream: S) -> ContextJoinHandle
@@ -383,12 +385,7 @@ impl<A: Actor> ContextFuture<A> {
         while i < this.cache_ref.len() {
             match this.cache_ref[i].as_mut().poll(cx) {
                 Poll::Ready(()) => {
-                    // SAFETY:
-                    // Vec::swap_remove with no len check and drop of removed element in place.
-                    // i is guaranteed to be smaller than this.cache_ref.len()
-                    unsafe {
-                        this.cache_ref.swap_remove_uncheck(i);
-                    }
+                    this.cache_ref.swap_remove(i);
                 }
                 Poll::Pending => i += 1,
             }
@@ -419,13 +416,7 @@ impl<A: Actor> ContextFuture<A> {
                 // SAFETY: FutureMessage never moved until they are resolved.
                 match Pin::new(&mut this.future_cache[i]).poll(cx) {
                     Poll::Ready(msg) => {
-                        // SAFETY:
-                        // Vec::swap_remove with no len check and drop of removed
-                        // element in place.
-                        // i is guaranteed to be smaller than future_cache.len()
-                        unsafe {
-                            this.future_cache.swap_remove_uncheck(i);
-                        }
+                        this.future_cache.swap_remove(i);
 
                         match msg {
                             Some(ActorMessage::Ref(msg)) => {
@@ -457,13 +448,7 @@ impl<A: Actor> ContextFuture<A> {
                     }
                     // stream is either canceled by ContextJoinHandle or finished.
                     Poll::Ready(None) => {
-                        // SAFETY:
-                        // Vec::swap_remove with no len check and drop of removed
-                        // element in place.
-                        // i is guaranteed to be smaller than stream_cache.len()
-                        unsafe {
-                            this.stream_cache.swap_remove_uncheck(i);
-                        }
+                        this.stream_cache.swap_remove(i);
                     }
                     Poll::Pending => i += 1,
                     _ => unreachable!(),
@@ -598,23 +583,5 @@ impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
     fn merge(&mut self, ctx: &mut Context<A>) {
         let future = ctx.future_message.get_mut();
         self.extend(future.drain(0..));
-    }
-}
-
-// SAFETY:
-// swap remove with index. do not check for overflow.
-// caller is in charge of check the index to make sure it's smaller than then length.
-trait SwapRemoveUncheck {
-    unsafe fn swap_remove_uncheck(&mut self, index: usize);
-}
-
-impl<T> SwapRemoveUncheck for Vec<T> {
-    #[inline(always)]
-    unsafe fn swap_remove_uncheck(&mut self, i: usize) {
-        let len = self.len();
-        let mut last = read(self.as_ptr().add(len - 1));
-        let hole = self.as_mut_ptr().add(i);
-        self.set_len(len - 1);
-        swap(&mut *hole, &mut last);
     }
 }
