@@ -24,11 +24,11 @@ use crate::util::futures::{ready, LocalBoxFuture, Stream};
 /// `Handler::handle_wait` method.
 ///
 /// Used to mutate the state of actor and add additional tasks to actor.
-pub struct Context<A: Actor> {
-    state: Cell<ActorState>,
-    future_message: RefCell<Vec<FutureMessage<A>>>,
-    stream_message: RefCell<Vec<StreamMessage<A>>>,
-    rx: Receiver<ActorMessage<A>>,
+pub struct Context<'a, A: Actor> {
+    state: &'a Cell<ActorState>,
+    future_cache: &'a RefCell<Vec<FutureMessage<A>>>,
+    stream_cache: &'a RefCell<Vec<StreamMessage<A>>>,
+    rx: &'a Receiver<ActorMessage<A>>,
 }
 
 /// a join handle can be used to cancel a spawned async task like interval closure and stream
@@ -52,12 +52,17 @@ impl ContextJoinHandle {
     }
 }
 
-impl<A: Actor> Context<A> {
-    pub(crate) fn new(rx: Receiver<ActorMessage<A>>) -> Self {
+impl<'c, A: Actor> Context<'c, A> {
+    pub(crate) fn new(
+        state: &'c Cell<ActorState>,
+        future_cache: &'c RefCell<Vec<FutureMessage<A>>>,
+        stream_cache: &'c RefCell<Vec<StreamMessage<A>>>,
+        rx: &'c Receiver<ActorMessage<A>>,
+    ) -> Self {
         Context {
-            state: Cell::new(ActorState::Stop),
-            future_message: RefCell::new(Vec::with_capacity(8)),
-            stream_message: RefCell::new(Vec::with_capacity(8)),
+            state,
+            future_cache,
+            stream_cache,
             rx,
         }
     }
@@ -65,7 +70,7 @@ impl<A: Actor> Context<A> {
     /// run interval concurrent closure on context. `Handler::handle` will be called.
     pub fn run_interval<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
-        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, ()> + Clone + 'static,
+        F: for<'a> FnOnce(&'a A, Context<'a, A>) -> LocalBoxFuture<'a, ()> + Clone + 'static,
     {
         self.interval(|rx| {
             let msg = FunctionMessage::new(f);
@@ -77,9 +82,7 @@ impl<A: Actor> Context<A> {
     /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
     pub fn run_wait_interval<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
-        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, ()>
-            + Clone
-            + 'static,
+        F: for<'a> FnOnce(&'a mut A, Context<'a, A>) -> LocalBoxFuture<'a, ()> + Clone + 'static,
     {
         self.interval(|rx| {
             let msg = FunctionMutMessage::new(f);
@@ -96,7 +99,7 @@ impl<A: Actor> Context<A> {
         let msg = f(rx);
         let msg = StreamMessage::new_interval(msg);
 
-        self.stream_message.borrow_mut().push(msg);
+        self.stream_cache.borrow_mut().push(msg);
 
         ContextJoinHandle { handle }
     }
@@ -104,7 +107,7 @@ impl<A: Actor> Context<A> {
     /// run concurrent closure on context after given duration. `Handler::handle` will be called.
     pub fn run_later<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
-        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, ()> + 'static,
+        F: for<'a> FnOnce(&'a A, Context<'a, A>) -> LocalBoxFuture<'a, ()> + 'static,
     {
         self.later(|rx| {
             let msg = FunctionMessage::<_, ()>::new(f);
@@ -118,7 +121,7 @@ impl<A: Actor> Context<A> {
     /// If `Handler::handle_wait` is not override `Handler::handle` will be called as fallback.
     pub fn run_wait_later<F>(&self, dur: Duration, f: F) -> ContextJoinHandle
     where
-        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, ()> + 'static,
+        F: for<'a> FnOnce(&'a mut A, Context<'a, A>) -> LocalBoxFuture<'a, ()> + 'static,
     {
         self.later(|rx| {
             let msg = FunctionMutMessage::<_, ()>::new(f);
@@ -132,7 +135,7 @@ impl<A: Actor> Context<A> {
         F: FnOnce(OneshotReceiver<()>) -> FutureMessage<A>,
     {
         let (handle, rx) = oneshot();
-        self.future_message.borrow_mut().push(f(rx));
+        self.future_cache.borrow_mut().push(f(rx));
         ContextJoinHandle { handle }
     }
 
@@ -148,7 +151,7 @@ impl<A: Actor> Context<A> {
 
     /// get the address of actor from context.
     pub fn address(&self) -> Option<Addr<A>> {
-        Addr::from_recv(&self.rx).ok()
+        Addr::from_recv(self.rx).ok()
     }
 
     /// add a stream to context. multiple stream can be added to one context.
@@ -172,7 +175,7 @@ impl<A: Actor> Context<A> {
     ///
     /// #[async_trait::async_trait(?Send)]
     /// impl Handler<StreamMessage> for StreamActor {
-    ///     async fn handle(&self, _: StreamMessage, _: &Context<Self>) {
+    ///     async fn handle(&self, _: StreamMessage, _: Context<'_, Self>) {
     ///     /*
     ///         The stream is owned by Context so there is no default way to return anything
     ///         from the handler.
@@ -224,17 +227,8 @@ impl<A: Actor> Context<A> {
         let (handle, rx) = oneshot();
         let stream = StreamContainer::new(stream, rx, f);
         let msg = StreamMessage::new_boxed(stream);
-        self.stream_message.borrow_mut().push(msg);
+        self.stream_cache.borrow_mut().push(msg);
         ContextJoinHandle { handle }
-    }
-
-    #[inline(always)]
-    pub(crate) fn is_running(&self) -> bool {
-        self.state.get() == ActorState::Running
-    }
-
-    fn set_running(&self) {
-        self.state.set(ActorState::Running);
     }
 }
 
@@ -262,7 +256,7 @@ impl<A: Actor> CacheRef<A> {
     }
 
     #[inline(always)]
-    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: &Context<A>) {
+    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: Context<'_, A>) {
         self.push(msg.handle(act, ctx));
     }
 }
@@ -299,7 +293,7 @@ impl CacheMut {
         &mut self,
         mut msg: Box<dyn MessageHandler<A>>,
         act: &mut A,
-        ctx: &mut Context<A>,
+        ctx: Context<'_, A>,
     ) {
         self.0 = Some(msg.handle_wait(act, ctx));
     }
@@ -307,11 +301,12 @@ impl CacheMut {
 
 pub(crate) struct ContextFuture<A: Actor> {
     act: A,
-    pub(crate) ctx: Context<A>,
+    act_state: Cell<ActorState>,
+    act_rx: Receiver<ActorMessage<A>>,
     pub(crate) cache_mut: CacheMut,
     pub(crate) cache_ref: CacheRef<A>,
-    future_cache: Vec<FutureMessage<A>>,
-    stream_cache: Vec<StreamMessage<A>>,
+    future_cache: RefCell<Vec<FutureMessage<A>>>,
+    stream_cache: RefCell<Vec<StreamMessage<A>>>,
     drop_notify: Option<OneshotSender<()>>,
     state: ContextState,
     poll_task: Option<Task>,
@@ -336,14 +331,21 @@ impl<A: Actor> Drop for ContextFuture<A> {
 
 impl<A: Actor> ContextFuture<A> {
     #[inline(always)]
-    pub(crate) fn new(act: A, ctx: Context<A>) -> Self {
+    pub(crate) fn new(
+        act: A,
+        act_state: Cell<ActorState>,
+        act_rx: Receiver<ActorMessage<A>>,
+        future_cache: RefCell<Vec<FutureMessage<A>>>,
+        stream_cache: RefCell<Vec<StreamMessage<A>>>,
+    ) -> Self {
         Self {
             act,
-            ctx,
+            act_state,
+            act_rx,
             cache_mut: CacheMut::new(),
             cache_ref: CacheRef::new(),
-            future_cache: Vec::with_capacity(8),
-            stream_cache: Vec::with_capacity(8),
+            future_cache,
+            stream_cache,
             drop_notify: None,
             state: ContextState::Starting,
             poll_task: None,
@@ -353,22 +355,21 @@ impl<A: Actor> ContextFuture<A> {
 
     #[inline(always)]
     fn merge(&mut self) {
-        let ctx = &mut self.ctx;
-        self.future_cache.merge(ctx);
-        self.stream_cache.merge(ctx);
     }
 
     #[inline(always)]
     fn add_exclusive(&mut self, msg: Box<dyn MessageHandler<A>>) {
+        let ctx = Context::new(&self.act_state, &self.future_cache, &self.stream_cache, &self.act_rx);
         self.cache_mut
-            .add_exclusive(msg, &mut self.act, &mut self.ctx);
+            .add_exclusive(msg, &mut self.act, ctx);
     }
 
     #[inline(always)]
     fn add_concurrent(&mut self, msg: Box<dyn MessageHandler<A>>) {
         // when adding new concurrent message we always want an extra poll to register them.
         self.extra_poll = true;
-        self.cache_ref.add_concurrent(msg, &self.act, &self.ctx);
+        let ctx = Context::new(&self.act_state, &self.future_cache, &self.stream_cache, &self.act_rx);
+        self.cache_ref.add_concurrent(msg, &self.act, ctx);
     }
 
     #[inline(always)]
@@ -407,16 +408,14 @@ impl<A: Actor> ContextFuture<A> {
         this.extra_poll = false;
 
         // If context is stopped we stop dealing with future and stream messages.
-        if this.ctx.is_running() {
-            this.merge();
-
+        if this.act_state.get() == ActorState::Running {
             // poll future messages
             let mut i = 0;
-            while i < this.future_cache.len() {
+            while i < this.future_cache.get_mut().len() {
                 // SAFETY: FutureMessage never moved until they are resolved.
-                match Pin::new(&mut this.future_cache[i]).poll(cx) {
+                match Pin::new(&mut this.future_cache.get_mut()[i]).poll(cx) {
                     Poll::Ready(msg) => {
-                        this.future_cache.swap_remove(i);
+                        this.future_cache.get_mut().swap_remove(i);
 
                         match msg {
                             Some(ActorMessage::Ref(msg)) => {
@@ -437,8 +436,8 @@ impl<A: Actor> ContextFuture<A> {
 
             // poll stream message.
             let mut i = 0;
-            while i < this.stream_cache.len() {
-                match Pin::new(&mut this.stream_cache[i]).poll_next(cx) {
+            while i < this.stream_cache.get_mut().len() {
+                match Pin::new(&mut this.stream_cache.get_mut()[i]).poll_next(cx) {
                     Poll::Ready(Some(ActorMessage::Ref(msg))) => {
                         this.add_concurrent(msg);
                     }
@@ -448,7 +447,7 @@ impl<A: Actor> ContextFuture<A> {
                     }
                     // stream is either canceled by ContextJoinHandle or finished.
                     Poll::Ready(None) => {
-                        this.stream_cache.swap_remove(i);
+                        this.stream_cache.get_mut().swap_remove(i);
                     }
                     Poll::Pending => i += 1,
                     _ => unreachable!(),
@@ -458,7 +457,7 @@ impl<A: Actor> ContextFuture<A> {
 
         // actively drain receiver channel for incoming messages.
         loop {
-            match Pin::new(&mut this.ctx.rx).poll_next(cx) {
+            match Pin::new(&mut this.act_rx).poll_next(cx) {
                 // new concurrent message. add it to cache_ref and continue.
                 Poll::Ready(Some(ActorMessage::Ref(msg))) => {
                     this.add_concurrent(msg);
@@ -474,7 +473,8 @@ impl<A: Actor> ContextFuture<A> {
                     // a oneshot sender to to notify the caller shut down is complete.
                     this.drop_notify = Some(notify);
                     // stop context which would close the channel.
-                    this.ctx.stop();
+                    this.act_rx.close();
+                    this.act_state.set(ActorState::StopGraceful);
                     // goes to stopping state if it's a force shut down.
                     // otherwise keep the loop until we drain the channel.
                     if let ActorState::Stop = state {
@@ -485,7 +485,8 @@ impl<A: Actor> ContextFuture<A> {
                 // channel is closed
                 Poll::Ready(None) => {
                     // stop context just in case.
-                    this.ctx.stop();
+                    this.act_rx.close();
+                    this.act_state.set(ActorState::StopGraceful);
                     // have new concurrent message. poll another round.
                     return if this.extra_poll {
                         self.poll_running(cx)
@@ -516,7 +517,7 @@ impl<A: Actor> ContextFuture<A> {
             Some(task) => {
                 ready!(task.as_mut().poll(cx));
                 this.poll_task = None;
-                this.ctx.set_running();
+                this.act_state.set(ActorState::Running);
                 this.state = ContextState::Running;
                 self.poll_running(cx)
             }
@@ -525,7 +526,8 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_start transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let task = unsafe { transmute(this.act.on_start(&mut this.ctx)) };
+                let ctx = Context::new(&this.act_state, &this.future_cache, &this.stream_cache, &this.act_rx);
+                let task = unsafe { transmute(this.act.on_start(ctx)) };
                 this.poll_task = Some(task);
                 self.poll_start(cx)
             }
@@ -545,7 +547,8 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_stop transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let task = unsafe { transmute(this.act.on_stop(&mut this.ctx)) };
+                let ctx = Context::new(&this.act_state, &this.future_cache, &this.stream_cache, &this.act_rx);
+                let task = unsafe { transmute(this.act.on_stop(ctx)) };
                 this.poll_task = Some(task);
                 self.poll_close(cx)
             }
@@ -562,26 +565,5 @@ impl<A: Actor> Future for ContextFuture<A> {
             ContextState::Starting => self.poll_start(cx),
             ContextState::Stopping => self.poll_close(cx),
         }
-    }
-}
-
-// merge Context with ContextWithActor
-trait MergeContext<A: Actor> {
-    fn merge(&mut self, ctx: &mut Context<A>);
-}
-
-impl<A: Actor> MergeContext<A> for Vec<StreamMessage<A>> {
-    #[inline(always)]
-    fn merge(&mut self, ctx: &mut Context<A>) {
-        let stream = ctx.stream_message.get_mut();
-        self.extend(stream.drain(0..));
-    }
-}
-
-impl<A: Actor> MergeContext<A> for Vec<FutureMessage<A>> {
-    #[inline(always)]
-    fn merge(&mut self, ctx: &mut Context<A>) {
-        let future = ctx.future_message.get_mut();
-        self.extend(future.drain(0..));
     }
 }

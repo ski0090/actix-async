@@ -20,7 +20,7 @@ pub trait Actor: Sized + 'static {
     /// async hook before actor start to run.
     fn on_start<'act, 'ctx, 'res>(
         &'act mut self,
-        ctx: &'ctx mut Context<Self>,
+        ctx: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, ()>
     where
         'act: 'res,
@@ -34,7 +34,7 @@ pub trait Actor: Sized + 'static {
     /// async hook before actor stops
     fn on_stop<'act, 'ctx, 'res>(
         &'act mut self,
-        ctx: &'ctx mut Context<Self>,
+        ctx: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, ()>
     where
         'act: 'res,
@@ -53,7 +53,7 @@ pub trait Actor: Sized + 'static {
     /// create actor with closure
     fn create<F>(f: F) -> Addr<Self>
     where
-        F: FnOnce(&mut Context<Self>) -> Self + 'static,
+        F: for<'c> FnOnce(Context<'c, Self>) -> Self + 'static,
     {
         Self::create_async(|ctx| ready(f(ctx)))
     }
@@ -100,7 +100,7 @@ pub trait Actor: Sized + 'static {
     /// ```
     fn create_async<F, Fut>(f: F) -> Addr<Self>
     where
-        F: FnOnce(&mut Context<Self>) -> Fut + 'static,
+        F: for<'c> FnOnce(Context<'c, Self>) -> Fut + 'static,
         Fut: Future<Output = Self>,
     {
         let (tx, rx) = channel(Self::size_hint());
@@ -133,15 +133,20 @@ pub trait Actor: Sized + 'static {
 
     fn _start<F, Fut>(rx: Receiver<ActorMessage<Self>>, f: F)
     where
-        F: FnOnce(&mut Context<Self>) -> Fut + 'static,
+        F: for<'c> FnOnce(Context<'c, Self>) -> Fut + 'static,
         Fut: Future<Output = Self>,
     {
         Self::spawn(async move {
-            let mut ctx = Context::new(rx);
+            let future_cache = core::cell::RefCell::new(alloc::vec::Vec::with_capacity(8));
+            let stream_cache = core::cell::RefCell::new(alloc::vec::Vec::with_capacity(8));
 
-            let actor = f(&mut ctx).await;
+            let act_state = core::cell::Cell::new(ActorState::Stop);
 
-            ContextFuture::new(actor, ctx).await;
+            let ctx = Context::new(&act_state, &future_cache, &stream_cache, &rx);
+
+            let actor = f(ctx).await;
+
+            ContextFuture::new(actor, act_state, rx, future_cache, stream_cache).await;
         });
     }
 }

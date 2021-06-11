@@ -24,7 +24,7 @@ message!(Msg, ());
 #[async_trait::async_trait(?Send)]
 impl Handler<Msg> for MyActor {
     // Use handle method whenever you can. Handler::handle_wait would always be slower.
-    async fn handle(&self, _: Msg, _: &Context<Self>) {
+    async fn handle(&self, _: Msg, _: Context<'_, Self>) {
         // RefCell can safely mutate actor state as long as RefMut is not held across await point.
         let mut state = self.state_mut.borrow_mut();
 
@@ -63,23 +63,25 @@ impl Handler<Msg> for MyActor {
 
 #[tokio::main]
 async fn main() {
-    let act = MyActor {
-        state_mut: RefCell::new(0),
-        state_shared: Rc::new(0),
-        state_mut_await: LocalMutex::new(0, false),
-    };
+    tokio::task::LocalSet::new().run_until(async {
+        let act = MyActor {
+            state_mut: RefCell::new(0),
+            state_shared: Rc::new(0),
+            state_mut_await: LocalMutex::new(0, false),
+        };
 
-    let addr = act.start();
+        let addr = act.start();
 
-    let mut fut = FuturesUnordered::new();
+        let mut fut = FuturesUnordered::new();
 
-    for _ in 0..100 {
-        fut.push(addr.send(Msg));
-    }
+        for _ in 0..100 {
+            fut.push(addr.send(Msg));
+        }
 
-    while fut.next().await.is_some() {}
+        while fut.next().await.is_some() {}
 
-    let res = addr.stop(true).await;
+        let res = addr.stop(true).await;
 
-    assert!(res.is_ok())
+        assert!(res.is_ok())
+    }).await
 }

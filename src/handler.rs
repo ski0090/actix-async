@@ -35,7 +35,7 @@ use crate::util::futures::LocalBoxFuture;
 ///
 /// // impl boxed future manually without async_trait.
 /// impl Handler<TestMessage2> for TestActor {
-///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: &'c Context<Self>) -> LocalBoxFuture<'r, ()> {
+///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: Context<'c, Self>) -> LocalBoxFuture<'r, ()> {
 ///         Box::pin(async move {
 ///             let _this = self;
 ///             let _ctx = ctx;
@@ -54,7 +54,7 @@ where
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         msg: M,
-        ctx: &'ctx Context<Self>,
+        ctx: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, M::Result>
     where
         'act: 'res,
@@ -65,7 +65,7 @@ where
     fn handle_wait<'act, 'ctx, 'res>(
         &'act mut self,
         msg: M,
-        ctx: &'ctx mut Context<Self>,
+        ctx: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, M::Result>
     where
         'act: 'res,
@@ -79,13 +79,13 @@ where
 impl<A, F, R> Handler<FunctionMessage<F, R>> for A
 where
     A: Actor,
-    F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, R> + 'static,
+    F: for<'a> FnOnce(&'a A, Context<'a, A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         msg: FunctionMessage<F, R>,
-        ctx: &'ctx Context<Self>,
+        ctx: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, R>
     where
         'act: 'res,
@@ -98,13 +98,13 @@ where
 impl<A, F, R> Handler<FunctionMutMessage<F, R>> for A
 where
     A: Actor,
-    F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, R> + 'static,
+    F: for<'a> FnOnce(&'a mut A, Context<'a, A>) -> LocalBoxFuture<'a, R> + 'static,
     R: Send + 'static,
 {
     fn handle<'act, 'ctx, 'res>(
         &'act self,
         _: FunctionMutMessage<F, R>,
-        _: &'ctx Context<Self>,
+        _: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, R>
     where
         'act: 'res,
@@ -116,7 +116,7 @@ where
     fn handle_wait<'act, 'ctx, 'res>(
         &'act mut self,
         msg: FunctionMutMessage<F, R>,
-        ctx: &'ctx mut Context<Self>,
+        ctx: Context<'ctx, Self>,
     ) -> LocalBoxFuture<'res, R>
     where
         'act: 'res,
@@ -130,13 +130,13 @@ pub trait MessageHandler<A: Actor> {
     fn handle<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act A,
-        ctx: &'ctx Context<A>,
+        ctx: Context<'ctx, A>,
     ) -> LocalBoxFuture<'static, ()>;
 
     fn handle_wait<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act mut A,
-        ctx: &'ctx mut Context<A>,
+        ctx:  Context<'ctx, A>,
     ) -> LocalBoxFuture<'static, ()> {
         self.handle(act, ctx)
     }
@@ -150,7 +150,7 @@ where
     fn handle<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act A,
-        ctx: &'ctx Context<A>,
+        ctx: Context<'ctx, A>,
     ) -> LocalBoxFuture<'static, ()> {
         let (msg, tx) = self.take();
 
@@ -165,7 +165,7 @@ where
             ContextWithActor.cache_mut is polled.
         */
         let act = unsafe { transmute::<_, &'static A>(act) };
-        let ctx = unsafe { transmute::<_, &'static Context<A>>(ctx) };
+        let ctx = unsafe { transmute::<_, Context<'static, A>>(ctx) };
 
         let fut = act.handle(msg, ctx);
 
@@ -175,7 +175,7 @@ where
     fn handle_wait<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act mut A,
-        ctx: &'ctx mut Context<A>,
+        ctx: Context<'ctx, A>,
     ) -> LocalBoxFuture<'static, ()> {
         let (msg, tx) = self.take();
 
@@ -190,7 +190,7 @@ where
             ContextWithActor.cache_ref is empty.
         */
         let act = unsafe { transmute::<_, &'static mut A>(act) };
-        let ctx = unsafe { transmute::<_, &'static mut Context<A>>(ctx) };
+        let ctx = unsafe { transmute::<_, Context<'static, A>>(ctx) };
 
         let fut = act.handle_wait(msg, ctx);
 

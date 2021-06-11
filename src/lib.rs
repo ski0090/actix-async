@@ -18,12 +18,12 @@
 //! #[async_trait::async_trait(?Send)]
 //! impl Handler<TestMessage> for TestActor {
 //!     // concurrent message handler where actor state and context are borrowed immutably.
-//!     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> u32 {
+//!     async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> u32 {
 //!         996
 //!     }
 //!     
 //!     // exclusive message handler where actor state and context are borrowed mutably.
-//!     async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> u32 {
+//!     async fn handle_wait(&mut self, _: TestMessage, _: Context<'_, Self>) -> u32 {
 //!         251
 //!     }
 //! }
@@ -332,7 +332,7 @@ mod test {
     impl Actor for TestActor {
         type Runtime = TokioRuntime;
 
-        async fn on_start(&mut self, _: &mut Context<Self>) {
+        async fn on_start(&mut self, _: Context<'_, Self>) {
             self.0 += 1;
             assert_eq!(997, self.0);
             self.0 -= 1;
@@ -345,11 +345,11 @@ mod test {
 
     #[async_trait(?Send)]
     impl Handler<TestMessage> for TestActor {
-        async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
+        async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> usize {
             self.0
         }
 
-        async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> usize {
+        async fn handle_wait(&mut self, _: TestMessage, _: Context<'_, Self>) -> usize {
             251
         }
     }
@@ -363,7 +363,7 @@ mod test {
         async fn handle(
             &self,
             _: TestIntervalMessage,
-            ctx: &Context<Self>,
+            ctx: Context<'_, Self>,
         ) -> (Arc<AtomicUsize>, ContextJoinHandle) {
             let size = Arc::new(AtomicUsize::new(0));
             let handle = ctx.run_interval(Duration::from_millis(500), {
@@ -381,7 +381,7 @@ mod test {
         async fn handle_wait(
             &mut self,
             _: TestIntervalMessage,
-            ctx: &mut Context<Self>,
+            ctx: Context<'_, Self>,
         ) -> (Arc<AtomicUsize>, ContextJoinHandle) {
             let size = Arc::new(AtomicUsize::new(0));
             let handle = ctx.run_wait_interval(Duration::from_millis(500), {
@@ -403,7 +403,7 @@ mod test {
 
     #[async_trait(?Send)]
     impl Handler<TestTimeoutMessage> for TestActor {
-        async fn handle(&self, _: TestTimeoutMessage, _: &Context<Self>) {
+        async fn handle(&self, _: TestTimeoutMessage, _: Context<'_, Self>) {
             sleep(Duration::from_secs(2)).await;
         }
     }
@@ -418,7 +418,7 @@ mod test {
 
     #[async_trait(?Send)]
     impl Handler<TestDelayMessage> for TestActor {
-        async fn handle(&self, _: TestDelayMessage, ctx: &Context<Self>) -> ContextJoinHandle {
+        async fn handle(&self, _: TestDelayMessage, ctx: Context<'_, Self>) -> ContextJoinHandle {
             ctx.run_wait_later(Duration::from_millis(500), |act, _| {
                 Box::pin(async move {
                     act.0 += 1;
@@ -433,7 +433,7 @@ mod test {
 
     #[async_trait(?Send)]
     impl Handler<TestPanicMsg> for TestActor {
-        async fn handle(&self, _: TestPanicMsg, _: &Context<Self>) {
+        async fn handle(&self, _: TestPanicMsg, _: Context<'_, Self>) {
             panic!("This is a purpose panic to test actor recovery");
         }
     }

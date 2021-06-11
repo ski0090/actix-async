@@ -22,7 +22,7 @@ impl ClosureActor {
         self.0
     }
 
-    async fn access_context(&self, ctx: &Context<Self>) -> usize {
+    async fn access_context(&self, ctx: Context<'_, Self>) -> usize {
         sleep(Duration::from_millis(1)).await;
         ctx.stop();
         self.0 + 1

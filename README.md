@@ -23,12 +23,12 @@ message!(TestMessage, u32);
 #[async_trait::async_trait(?Send)]
 impl Handler<TestMessage> for TestActor {
     // concurrent message handler where actor state and context are borrowed immutably.
-    async fn handle(&self, _: TestMessage, _: &Context<Self>) -> u32 {
+    async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> u32 {
         996
     }
     
     // exclusive message handler where actor state and context are borrowed mutably.
-    async fn handle_wait(&mut self, _: TestMessage, _: &mut Context<Self>) -> u32 {
+    async fn handle_wait(&mut self, _: TestMessage, _: Context<'_, Self>) -> u32 {
         251
     }
 }

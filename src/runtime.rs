@@ -40,7 +40,7 @@ use core::time::Duration;
 ///
 /// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for AsyncStdActor {
-///     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
+///     async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> usize {
 ///         996
 ///     }
 /// }
@@ -51,7 +51,7 @@ use core::time::Duration;
 ///
 /// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for TokioActor {
-///     async fn handle(&self, _: TestMessage, _: &Context<Self>) -> usize {
+///     async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> usize {
 ///         251
 ///     }
 /// }

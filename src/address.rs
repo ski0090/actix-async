@@ -61,7 +61,7 @@ impl<A: Actor> Addr<A> {
     #[inline]
     pub fn run<F, R>(&self, func: F) -> MessageRequest<A, R>
     where
-        F: for<'a> FnOnce(&'a A, &'a Context<A>) -> LocalBoxFuture<'a, R> + Send + 'static,
+        F: for<'a> FnOnce(&'a A, Context<'a, A>) -> LocalBoxFuture<'a, R> + Send + 'static,
         R: Send + 'static,
     {
         self.send(FunctionMessage::new(func))
@@ -73,7 +73,7 @@ impl<A: Actor> Addr<A> {
     #[inline]
     pub fn run_wait<F, R>(&self, func: F) -> MessageRequest<A, R>
     where
-        F: for<'a> FnOnce(&'a mut A, &'a mut Context<A>) -> LocalBoxFuture<'a, R> + Send + 'static,
+        F: for<'a> FnOnce(&'a mut A, Context<'a, A>) -> LocalBoxFuture<'a, R> + Send + 'static,
         R: Send + 'static,
     {
         self.wait(FunctionMutMessage::new(func))
