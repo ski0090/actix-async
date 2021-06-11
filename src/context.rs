@@ -256,7 +256,12 @@ impl<A: Actor> CacheRef<A> {
     }
 
     #[inline(always)]
-    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>, act: &A, ctx: Context<'_, A>) {
+    fn add_concurrent(
+        &mut self,
+        mut msg: Box<dyn MessageHandler<A>>,
+        act: &A,
+        ctx: Context<'_, A>,
+    ) {
         self.push(msg.handle(act, ctx));
     }
 }
@@ -354,21 +359,26 @@ impl<A: Actor> ContextFuture<A> {
     }
 
     #[inline(always)]
-    fn merge(&mut self) {
-    }
-
-    #[inline(always)]
     fn add_exclusive(&mut self, msg: Box<dyn MessageHandler<A>>) {
-        let ctx = Context::new(&self.act_state, &self.future_cache, &self.stream_cache, &self.act_rx);
-        self.cache_mut
-            .add_exclusive(msg, &mut self.act, ctx);
+        let ctx = Context::new(
+            &self.act_state,
+            &self.future_cache,
+            &self.stream_cache,
+            &self.act_rx,
+        );
+        self.cache_mut.add_exclusive(msg, &mut self.act, ctx);
     }
 
     #[inline(always)]
     fn add_concurrent(&mut self, msg: Box<dyn MessageHandler<A>>) {
         // when adding new concurrent message we always want an extra poll to register them.
         self.extra_poll = true;
-        let ctx = Context::new(&self.act_state, &self.future_cache, &self.stream_cache, &self.act_rx);
+        let ctx = Context::new(
+            &self.act_state,
+            &self.future_cache,
+            &self.stream_cache,
+            &self.act_rx,
+        );
         self.cache_ref.add_concurrent(msg, &self.act, ctx);
     }
 
@@ -526,7 +536,12 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_start transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let ctx = Context::new(&this.act_state, &this.future_cache, &this.stream_cache, &this.act_rx);
+                let ctx = Context::new(
+                    &this.act_state,
+                    &this.future_cache,
+                    &this.stream_cache,
+                    &this.act_rx,
+                );
                 let task = unsafe { transmute(this.act.on_start(ctx)) };
                 this.poll_task = Some(task);
                 self.poll_start(cx)
@@ -547,7 +562,12 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_stop transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let ctx = Context::new(&this.act_state, &this.future_cache, &this.stream_cache, &this.act_rx);
+                let ctx = Context::new(
+                    &this.act_state,
+                    &this.future_cache,
+                    &this.stream_cache,
+                    &this.act_rx,
+                );
                 let task = unsafe { transmute(this.act.on_stop(ctx)) };
                 this.poll_task = Some(task);
                 self.poll_close(cx)

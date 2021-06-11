@@ -63,25 +63,27 @@ impl Handler<Msg> for MyActor {
 
 #[tokio::main]
 async fn main() {
-    tokio::task::LocalSet::new().run_until(async {
-        let act = MyActor {
-            state_mut: RefCell::new(0),
-            state_shared: Rc::new(0),
-            state_mut_await: LocalMutex::new(0, false),
-        };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let act = MyActor {
+                state_mut: RefCell::new(0),
+                state_shared: Rc::new(0),
+                state_mut_await: LocalMutex::new(0, false),
+            };
 
-        let addr = act.start();
+            let addr = act.start();
 
-        let mut fut = FuturesUnordered::new();
+            let mut fut = FuturesUnordered::new();
 
-        for _ in 0..100 {
-            fut.push(addr.send(Msg));
-        }
+            for _ in 0..100 {
+                fut.push(addr.send(Msg));
+            }
 
-        while fut.next().await.is_some() {}
+            while fut.next().await.is_some() {}
 
-        let res = addr.stop(true).await;
+            let res = addr.stop(true).await;
 
-        assert!(res.is_ok())
-    }).await
+            assert!(res.is_ok())
+        })
+        .await
 }

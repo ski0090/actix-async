@@ -26,7 +26,7 @@ use crate::util::futures::LocalBoxFuture;
 /// // use async method directly with the help of async_trait crate.
 /// #[async_trait::async_trait(?Send)]
 /// impl Handler<TestMessage> for TestActor {
-///    async fn handle(&self, _: TestMessage,ctx: &Context<Self>) {
+///    async fn handle(&self, _: TestMessage,ctx: Context<'_, Self>) {
 ///         let _this = self;
 ///         let _ctx = ctx;
 ///         println!("hello from TestMessage");
@@ -136,7 +136,7 @@ pub trait MessageHandler<A: Actor> {
     fn handle_wait<'msg, 'act, 'ctx>(
         &'msg mut self,
         act: &'act mut A,
-        ctx:  Context<'ctx, A>,
+        ctx: Context<'ctx, A>,
     ) -> LocalBoxFuture<'static, ()> {
         self.handle(act, ctx)
     }
