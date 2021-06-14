@@ -9,6 +9,7 @@ use core::time::Duration;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use slab::Slab;
 
 use crate::actor::{Actor, ActorState};
 use crate::address::Addr;
@@ -19,6 +20,7 @@ use crate::message::{
 };
 use crate::util::channel::{oneshot, OneshotReceiver, OneshotSender, Receiver};
 use crate::util::futures::{ready, LocalBoxFuture, Stream};
+use crate::waker::{ActorWaker, WakeQueue};
 
 /// Context type of `Actor` type. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -141,9 +143,6 @@ impl<'c, A: Actor> Context<'c, A> {
 
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
-    ///
-    /// *. In the case of using `Supervisor`. This method would stop all actor instances at the
-    /// same time
     pub fn stop(&self) {
         self.rx.close();
         self.state.set(ActorState::StopGraceful);
@@ -234,10 +233,10 @@ impl<'c, A: Actor> Context<'c, A> {
 
 type Task = LocalBoxFuture<'static, ()>;
 
-pub(crate) struct CacheRef<A>(Vec<Task>, PhantomData<A>);
+pub(crate) struct CacheRef<A>(Slab<Task>, PhantomData<A>);
 
 impl<A> Deref for CacheRef<A> {
-    type Target = Vec<Task>;
+    type Target = Slab<Task>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -252,7 +251,7 @@ impl<A> DerefMut for CacheRef<A> {
 
 impl<A: Actor> CacheRef<A> {
     fn new() -> Self {
-        Self(Vec::with_capacity(A::size_hint()), PhantomData)
+        Self(Slab::with_capacity(A::size_hint()), PhantomData)
     }
 
     #[inline(always)]
@@ -261,8 +260,8 @@ impl<A: Actor> CacheRef<A> {
         mut msg: Box<dyn MessageHandler<A>>,
         act: &A,
         ctx: Context<'_, A>,
-    ) {
-        self.push(msg.handle(act, ctx));
+    ) -> usize {
+        self.insert(msg.handle(act, ctx))
     }
 }
 
@@ -308,6 +307,7 @@ pub(crate) struct ContextFuture<A: Actor> {
     act: A,
     act_state: Cell<ActorState>,
     act_rx: Receiver<ActorMessage<A>>,
+    queue: WakeQueue,
     pub(crate) cache_mut: CacheMut,
     pub(crate) cache_ref: CacheRef<A>,
     future_cache: RefCell<Vec<FutureMessage<A>>>,
@@ -347,6 +347,7 @@ impl<A: Actor> ContextFuture<A> {
             act,
             act_state,
             act_rx,
+            queue: WakeQueue::new(),
             cache_mut: CacheMut::new(),
             cache_ref: CacheRef::new(),
             future_cache,
@@ -379,7 +380,8 @@ impl<A: Actor> ContextFuture<A> {
             &self.stream_cache,
             &self.act_rx,
         );
-        self.cache_ref.add_concurrent(msg, &self.act, ctx);
+        let idx = self.cache_ref.add_concurrent(msg, &self.act, ctx);
+        self.queue.enqueue(idx);
     }
 
     #[inline(always)]
@@ -391,26 +393,42 @@ impl<A: Actor> ContextFuture<A> {
     fn poll_running(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
 
+        let mut state = this.queue.load();
+
         // poll concurrent messages
-        let mut i = 0;
-        while i < this.cache_ref.len() {
-            match this.cache_ref[i].as_mut().poll(cx) {
-                Poll::Ready(()) => {
-                    this.cache_ref.swap_remove(i);
+        let mut finished = Vec::new();
+        for (idx, task) in this.cache_ref.iter_mut() {
+            // only poll task that is queued.
+            if state.is_queued(idx) {
+                // dequeue immediately as polling tasks may result in a in place enqueue.
+                state.dequeue(idx);
+
+                // construct actor waker from the waker actor received.
+                let waker = ActorWaker::new(&this.queue, idx, cx.waker()).into();
+                let ctx = &mut StdContext::from_waker(&waker);
+
+                // prepare to remove the resolved tasks.
+                if task.as_mut().poll(ctx).is_ready() {
+                    finished.push(idx);
                 }
-                Poll::Pending => i += 1,
             }
         }
+
+        for idx in finished {
+            this.cache_ref.remove(idx);
+        }
+
+        this.queue.store(state);
 
         // try to poll exclusive message.
         match this.cache_mut.as_mut() {
             // still have concurrent messages. finish them.
             Some(_) if !this.cache_ref.is_empty() => return Poll::Pending,
             // poll exclusive message and remove it when success.
-            Some(fut_mut) => match fut_mut.as_mut().poll(cx) {
-                Poll::Ready(_) => this.cache_mut.clear(),
-                Poll::Pending => return Poll::Pending,
-            },
+            Some(fut_mut) => {
+                ready!(fut_mut.as_mut().poll(cx));
+                this.cache_mut.clear();
+            }
             None => {}
         }
 
@@ -447,21 +465,36 @@ impl<A: Actor> ContextFuture<A> {
             // poll stream message.
             let mut i = 0;
             while i < this.stream_cache.get_mut().len() {
-                match Pin::new(&mut this.stream_cache.get_mut()[i]).poll_next(cx) {
-                    Poll::Ready(Some(ActorMessage::Ref(msg))) => {
-                        this.add_concurrent(msg);
+                let mut polled = 0;
+
+                'stream: while let Poll::Ready(res) =
+                    Pin::new(&mut this.stream_cache.get_mut()[i]).poll_next(cx)
+                {
+                    polled += 1;
+                    match res {
+                        Some(ActorMessage::Ref(msg)) => {
+                            this.add_concurrent(msg);
+                        }
+                        Some(ActorMessage::Mut(msg)) => {
+                            this.add_exclusive(msg);
+                            return self.poll_running(cx);
+                        }
+                        // stream is either canceled by ContextJoinHandle or finished.
+                        None => {
+                            this.stream_cache.get_mut().swap_remove(i);
+                            break 'stream;
+                        }
+                        _ => unreachable!(),
                     }
-                    Poll::Ready(Some(ActorMessage::Mut(msg))) => {
-                        this.add_exclusive(msg);
-                        return self.poll_running(cx);
+
+                    // force to yield when having 16 consecutive successful poll.
+                    if polled == 16 {
+                        cx.waker().wake_by_ref();
+                        break 'stream;
                     }
-                    // stream is either canceled by ContextJoinHandle or finished.
-                    Poll::Ready(None) => {
-                        this.stream_cache.get_mut().swap_remove(i);
-                    }
-                    Poll::Pending => i += 1,
-                    _ => unreachable!(),
                 }
+
+                i += 1;
             }
         }
 

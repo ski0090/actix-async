@@ -63,6 +63,7 @@ mod handler;
 mod macros;
 mod message;
 mod util;
+mod waker;
 
 pub mod address;
 pub mod context;

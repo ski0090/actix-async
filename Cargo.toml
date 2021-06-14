@@ -20,6 +20,7 @@ path = "./examples/closure.rs"
 cache-padded = "1.1.1"
 futures-core = { version = "0.3", default-features = false }
 pin-project-lite = "0.2.6"
+slab = { version = "0.4.3", default-features = false }
 spin = "0.7.0"
 tokio = { version = "1.6", optional = true }
 

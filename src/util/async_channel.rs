@@ -10,7 +10,6 @@ use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 use core::task::{Context as StdContext, Poll, Waker};
-use core::usize;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
