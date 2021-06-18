@@ -35,35 +35,39 @@ impl ClosureActor {
 
 #[tokio::main]
 async fn main() {
-    let actor = ClosureActor(0);
-    let addr = actor.start();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let actor = ClosureActor(0);
+            let addr = actor.start();
 
-    // mutate actor state.
-    let res = addr
-        .run_wait(|act, _| act.mutate_state().boxed_local())
+            // mutate actor state.
+            let res = addr
+                .run_wait(|act, _| act.mutate_state().boxed_local())
+                .await;
+
+            assert_eq!(1, res.unwrap());
+
+            // capture var and move it into closure
+            let var = 996usize;
+            let res = addr
+                .run(move |act, _| act.capture_outer_var(var).boxed_local())
+                .await;
+
+            assert_eq!(var * 2, res.unwrap());
+
+            // access context.
+            let res = addr
+                .run(|act, ctx| act.access_context(ctx).boxed_local())
+                .await;
+
+            assert_eq!(2, res.unwrap());
+
+            // actor already shut down with previous access.
+            let res = addr
+                .run_wait(|act, _| act.mutate_state().boxed_local())
+                .await;
+
+            assert_eq!(res, Err(ActixAsyncError::Closed));
+        })
         .await;
-
-    assert_eq!(1, res.unwrap());
-
-    // capture var and move it into closure
-    let var = 996usize;
-    let res = addr
-        .run(move |act, _| act.capture_outer_var(var).boxed_local())
-        .await;
-
-    assert_eq!(var * 2, res.unwrap());
-
-    // access context.
-    let res = addr
-        .run(|act, ctx| act.access_context(ctx).boxed_local())
-        .await;
-
-    assert_eq!(2, res.unwrap());
-
-    // actor already shut down with previous access.
-    let res = addr
-        .run_wait(|act, _| act.mutate_state().boxed_local())
-        .await;
-
-    assert_eq!(res, Err(ActixAsyncError::Closed));
 }

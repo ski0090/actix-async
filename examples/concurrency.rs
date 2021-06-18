@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use actix_async::prelude::*;
+use async_trait::async_trait;
 use futures_intrusive::sync::LocalMutex;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
@@ -21,7 +22,7 @@ actor!(MyActor);
 struct Msg;
 message!(Msg, ());
 
-#[async_trait::async_trait(?Send)]
+#[async_trait(?Send)]
 impl Handler<Msg> for MyActor {
     // Use handle method whenever you can. Handler::handle_wait would always be slower.
     async fn handle(&self, _: Msg, _: Context<'_, Self>) {
@@ -50,7 +51,7 @@ impl Handler<Msg> for MyActor {
         // eg: tokio::sync::{Mutex, RwLock}
         let mut state = self.state_mut_await.lock().await;
 
-        sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(10)).await;
 
         // We held the mutable state across await point. But it comes with a cost.
         // The actor would be blocked on this message as long as the MutexGuard is

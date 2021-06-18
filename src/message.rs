@@ -10,7 +10,7 @@ use crate::actor::{Actor, ActorState};
 use crate::handler::{Handler, MessageHandler};
 use crate::runtime::RuntimeService;
 use crate::util::channel::{OneshotReceiver, OneshotSender};
-use crate::util::futures::{ready, Stream};
+use crate::util::futures::{ready, LocalBoxStream, Stream};
 use crate::util::smart_pointer::RefCounter;
 
 /// trait define types goes through actor's `Addr` to it's `Handler`
@@ -249,7 +249,7 @@ impl<A: Actor> Stream for IntervalMessage<A> {
 
 pub(crate) enum StreamMessage<A: Actor> {
     Interval(IntervalMessage<A>),
-    Boxed(Pin<Box<dyn Stream<Item = ActorMessage<A>>>>),
+    Boxed(LocalBoxStream<'static, ActorMessage<A>>),
 }
 
 impl<A: Actor> StreamMessage<A> {

@@ -1,8 +1,6 @@
-use core::future::Future;
-use core::pin::Pin;
+pub(crate) use futures_core::{
+    ready,
+    stream::{LocalBoxStream, Stream},
+};
 
-use alloc::boxed::Box;
-
-pub(crate) use futures_core::{ready, Stream};
-
-pub type LocalBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+pub use futures_core::future::LocalBoxFuture;

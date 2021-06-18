@@ -115,8 +115,6 @@ pub trait Actor: Sized + 'static {
     /// capacity of the actor's channel. Limit the max count of on flight messages.
     ///
     /// Default to `256`.
-    ///
-    /// *. `Supervisor` would adjust the channel size to `size_hint` * count of actor instances.
     fn size_hint() -> usize {
         CHANNEL_CAP
     }
@@ -137,10 +135,14 @@ pub trait Actor: Sized + 'static {
         Fut: Future<Output = Self>,
     {
         Self::spawn(async move {
-            let future_cache = core::cell::RefCell::new(alloc::vec::Vec::with_capacity(8));
-            let stream_cache = core::cell::RefCell::new(alloc::vec::Vec::with_capacity(8));
+            use core::cell::{Cell, RefCell};
 
-            let act_state = core::cell::Cell::new(ActorState::Stop);
+            use alloc::vec::Vec;
+
+            let future_cache = RefCell::new(Vec::with_capacity(8));
+            let stream_cache = RefCell::new(Vec::with_capacity(8));
+
+            let act_state = Cell::new(ActorState::Stop);
 
             let ctx = Context::new(&act_state, &future_cache, &stream_cache, &rx);
 

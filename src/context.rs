@@ -233,9 +233,9 @@ impl<'c, A: Actor> Context<'c, A> {
 
 type Task = LocalBoxFuture<'static, ()>;
 
-pub(crate) struct CacheRef<A>(Slab<Task>, PhantomData<A>);
+pub(crate) struct TaskRef<A>(Slab<Task>, PhantomData<A>);
 
-impl<A> Deref for CacheRef<A> {
+impl<A> Deref for TaskRef<A> {
     type Target = Slab<Task>;
 
     fn deref(&self) -> &Self::Target {
@@ -243,31 +243,26 @@ impl<A> Deref for CacheRef<A> {
     }
 }
 
-impl<A> DerefMut for CacheRef<A> {
+impl<A> DerefMut for TaskRef<A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<A: Actor> CacheRef<A> {
+impl<A: Actor> TaskRef<A> {
     fn new() -> Self {
         Self(Slab::with_capacity(A::size_hint()), PhantomData)
     }
 
     #[inline(always)]
-    fn add_concurrent(
-        &mut self,
-        mut msg: Box<dyn MessageHandler<A>>,
-        act: &A,
-        ctx: Context<'_, A>,
-    ) -> usize {
-        self.insert(msg.handle(act, ctx))
+    fn add_task(&mut self, task: Task) -> usize {
+        self.insert(task)
     }
 }
 
-pub(crate) struct CacheMut(Option<Task>);
+pub(crate) struct TaskMut(Option<Task>);
 
-impl Deref for CacheMut {
+impl Deref for TaskMut {
     type Target = Option<Task>;
 
     fn deref(&self) -> &Self::Target {
@@ -275,13 +270,13 @@ impl Deref for CacheMut {
     }
 }
 
-impl DerefMut for CacheMut {
+impl DerefMut for TaskMut {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl CacheMut {
+impl TaskMut {
     #[inline(always)]
     fn new() -> Self {
         Self(None)
@@ -293,13 +288,8 @@ impl CacheMut {
     }
 
     #[inline(always)]
-    fn add_exclusive<A: Actor>(
-        &mut self,
-        mut msg: Box<dyn MessageHandler<A>>,
-        act: &mut A,
-        ctx: Context<'_, A>,
-    ) {
-        self.0 = Some(msg.handle_wait(act, ctx));
+    fn add_task(&mut self, task: Task) {
+        self.0 = Some(task);
     }
 }
 
@@ -308,13 +298,12 @@ pub(crate) struct ContextFuture<A: Actor> {
     act_state: Cell<ActorState>,
     act_rx: Receiver<ActorMessage<A>>,
     queue: WakeQueue,
-    pub(crate) cache_mut: CacheMut,
-    pub(crate) cache_ref: CacheRef<A>,
+    pub(crate) cache_mut: TaskMut,
+    pub(crate) cache_ref: TaskRef<A>,
     future_cache: RefCell<Vec<FutureMessage<A>>>,
     stream_cache: RefCell<Vec<StreamMessage<A>>>,
     drop_notify: Option<OneshotSender<()>>,
     state: ContextState,
-    poll_task: Option<Task>,
     extra_poll: bool,
 }
 
@@ -348,30 +337,30 @@ impl<A: Actor> ContextFuture<A> {
             act_state,
             act_rx,
             queue: WakeQueue::new(),
-            cache_mut: CacheMut::new(),
-            cache_ref: CacheRef::new(),
+            cache_mut: TaskMut::new(),
+            cache_ref: TaskRef::new(),
             future_cache,
             stream_cache,
             drop_notify: None,
             state: ContextState::Starting,
-            poll_task: None,
             extra_poll: false,
         }
     }
 
     #[inline(always)]
-    fn add_exclusive(&mut self, msg: Box<dyn MessageHandler<A>>) {
+    fn add_exclusive(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
         let ctx = Context::new(
             &self.act_state,
             &self.future_cache,
             &self.stream_cache,
             &self.act_rx,
         );
-        self.cache_mut.add_exclusive(msg, &mut self.act, ctx);
+        let task = msg.handle_wait(&mut self.act, ctx);
+        self.cache_mut.add_task(task);
     }
 
     #[inline(always)]
-    fn add_concurrent(&mut self, msg: Box<dyn MessageHandler<A>>) {
+    fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
         // when adding new concurrent message we always want an extra poll to register them.
         self.extra_poll = true;
         let ctx = Context::new(
@@ -380,7 +369,8 @@ impl<A: Actor> ContextFuture<A> {
             &self.stream_cache,
             &self.act_rx,
         );
-        let idx = self.cache_ref.add_concurrent(msg, &self.act, ctx);
+        let task = msg.handle(&self.act, ctx);
+        let idx = self.cache_ref.add_task(task);
         self.queue.enqueue(idx);
     }
 
@@ -393,32 +383,22 @@ impl<A: Actor> ContextFuture<A> {
     fn poll_running(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
 
-        let mut state = this.queue.load();
+        // poll concurrent messages and collect task index that is ready.
 
-        // poll concurrent messages
-        let mut finished = Vec::new();
-        for (idx, task) in this.cache_ref.iter_mut() {
-            // only poll task that is queued.
-            if state.is_queued(idx) {
-                // dequeue immediately as polling tasks may result in a in place enqueue.
-                state.dequeue(idx);
-
+        // only try to get the lock. When lock is held by others it means they are about to wake up
+        // this actor future and it would be scheduled to wake up again.
+        while let Some(idx) = this.queue.0.try_lock().and_then(|mut l| l.pop_front()) {
+            if let Some(task) = this.cache_ref.get_mut(idx) {
                 // construct actor waker from the waker actor received.
                 let waker = ActorWaker::new(&this.queue, idx, cx.waker()).into();
                 let ctx = &mut StdContext::from_waker(&waker);
 
                 // prepare to remove the resolved tasks.
                 if task.as_mut().poll(ctx).is_ready() {
-                    finished.push(idx);
+                    this.cache_ref.remove(idx);
                 }
             }
         }
-
-        for idx in finished {
-            this.cache_ref.remove(idx);
-        }
-
-        this.queue.store(state);
 
         // try to poll exclusive message.
         match this.cache_mut.as_mut() {
@@ -440,10 +420,10 @@ impl<A: Actor> ContextFuture<A> {
             // poll future messages
             let mut i = 0;
             while i < this.future_cache.get_mut().len() {
-                // SAFETY: FutureMessage never moved until they are resolved.
-                match Pin::new(&mut this.future_cache.get_mut()[i]).poll(cx) {
+                let cache = this.future_cache.get_mut();
+                match Pin::new(&mut cache[i]).poll(cx) {
                     Poll::Ready(msg) => {
-                        this.future_cache.get_mut().swap_remove(i);
+                        cache.swap_remove(i);
 
                         match msg {
                             Some(ActorMessage::Ref(msg)) => {
@@ -464,6 +444,7 @@ impl<A: Actor> ContextFuture<A> {
 
             // poll stream message.
             let mut i = 0;
+            let mut extra_wake = false;
             while i < this.stream_cache.get_mut().len() {
                 let mut polled = 0;
 
@@ -489,12 +470,19 @@ impl<A: Actor> ContextFuture<A> {
 
                     // force to yield when having 16 consecutive successful poll.
                     if polled == 16 {
-                        cx.waker().wake_by_ref();
+                        // set flag to true when force yield happens.
+                        // this is to reduce the overhead of multiple streams that enter
+                        // this branch and all call for wake up.
+                        extra_wake = true;
                         break 'stream;
                     }
                 }
 
                 i += 1;
+            }
+
+            if extra_wake {
+                cx.waker().wake_by_ref();
             }
         }
 
@@ -556,27 +544,30 @@ impl<A: Actor> ContextFuture<A> {
 
     fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
-        match this.poll_task.as_mut() {
+        match this.cache_mut.as_mut() {
             Some(task) => {
                 ready!(task.as_mut().poll(cx));
-                this.poll_task = None;
+                this.cache_mut.clear();
                 this.act_state.set(ActorState::Running);
                 this.state = ContextState::Running;
                 self.poll_running(cx)
             }
             None => {
-                // SAFETY:
-                // Self reference is needed.
-                // on_start transmute to static lifetime must be resolved before dropping
-                // or move Context and Actor.
                 let ctx = Context::new(
                     &this.act_state,
                     &this.future_cache,
                     &this.stream_cache,
                     &this.act_rx,
                 );
+
+                // SAFETY:
+                // Self reference is needed.
+                // on_start transmute to static lifetime must be resolved before dropping
+                // or move Context and Actor.
                 let task = unsafe { transmute(this.act.on_start(ctx)) };
-                this.poll_task = Some(task);
+
+                this.cache_mut.add_task(task);
+
                 self.poll_start(cx)
             }
         }
@@ -584,25 +575,28 @@ impl<A: Actor> ContextFuture<A> {
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
-        match this.poll_task.as_mut() {
+        match this.cache_mut.as_mut() {
             Some(task) => {
                 ready!(task.as_mut().poll(cx));
-                this.poll_task = None;
+                this.cache_mut.clear();
                 Poll::Ready(())
             }
             None => {
-                // SAFETY:
-                // Self reference is needed.
-                // on_stop transmute to static lifetime must be resolved before dropping
-                // or move Context and Actor.
                 let ctx = Context::new(
                     &this.act_state,
                     &this.future_cache,
                     &this.stream_cache,
                     &this.act_rx,
                 );
+
+                // SAFETY:
+                // Self reference is needed.
+                // on_stop transmute to static lifetime must be resolved before dropping
+                // or move Context and Actor.
                 let task = unsafe { transmute(this.act.on_stop(ctx)) };
-                this.poll_task = Some(task);
+
+                this.cache_mut.add_task(task);
+
                 self.poll_close(cx)
             }
         }
