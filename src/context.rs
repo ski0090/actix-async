@@ -387,16 +387,24 @@ impl<A: Actor> ContextFuture<A> {
 
         // only try to get the lock. When lock is held by others it means they are about to wake up
         // this actor future and it would be scheduled to wake up again.
-        while let Some(idx) = this.queue.0.try_lock().and_then(|mut l| l.pop_front()) {
+        let len = this.cache_ref.len();
+        let mut polled = 0;
+        while let Some(idx) = this.queue.try_lock().and_then(|mut l| l.pop_front()) {
             if let Some(task) = this.cache_ref.get_mut(idx) {
                 // construct actor waker from the waker actor received.
                 let waker = ActorWaker::new(&this.queue, idx, cx.waker()).into();
-                let ctx = &mut StdContext::from_waker(&waker);
-
+                let cx = &mut StdContext::from_waker(&waker);
                 // prepare to remove the resolved tasks.
-                if task.as_mut().poll(ctx).is_ready() {
+                if task.as_mut().poll(cx).is_ready() {
                     this.cache_ref.remove(idx);
                 }
+            }
+            polled += 1;
+            // TODO: there is a race condition happening so a hard break is scheduled.
+            // investigate the source.
+            if polled == len {
+                cx.waker().wake_by_ref();
+                break;
             }
         }
 

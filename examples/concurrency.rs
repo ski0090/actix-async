@@ -51,7 +51,7 @@ impl Handler<Msg> for MyActor {
         // eg: tokio::sync::{Mutex, RwLock}
         let mut state = self.state_mut_await.lock().await;
 
-        sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(1)).await;
 
         // We held the mutable state across await point. But it comes with a cost.
         // The actor would be blocked on this message as long as the MutexGuard is
@@ -76,7 +76,7 @@ async fn main() {
 
             let mut fut = FuturesUnordered::new();
 
-            for _ in 0..100 {
+            for _ in 0..999 {
                 fut.push(addr.send(Msg));
             }
 

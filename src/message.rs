@@ -196,10 +196,7 @@ impl<A: Actor> Future for FutureMessage<A> {
             }
         }
 
-        this.delay
-            .as_mut()
-            .poll(cx)
-            .map(|_| Some(this.msg.take().unwrap()))
+        this.delay.as_mut().poll(cx).map(|_| this.msg.take())
     }
 }
 

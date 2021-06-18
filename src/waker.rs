@@ -1,4 +1,4 @@
-use core::task::Waker;
+use core::{ops::Deref, task::Waker};
 
 use alloc::{collections::LinkedList, sync::Arc, task::Wake};
 use spin::Mutex;
@@ -10,7 +10,7 @@ pub(crate) struct ActorWaker {
 }
 
 impl ActorWaker {
-    #[inline]
+    #[inline(always)]
     pub(crate) fn new(queued: &WakeQueue, idx: usize, waker: &Waker) -> Arc<Self> {
         Arc::new(Self {
             queue: WakeQueue::clone(queued),
@@ -22,7 +22,7 @@ impl ActorWaker {
 
 impl Wake for ActorWaker {
     fn wake(self: Arc<Self>) {
-        self.wake_by_ref()
+        self.wake_by_ref();
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
@@ -39,15 +39,24 @@ impl Wake for ActorWaker {
 }
 
 #[derive(Clone)]
-pub(crate) struct WakeQueue(pub(crate) Arc<Mutex<LinkedList<usize>>>);
+pub(crate) struct WakeQueue(Arc<Mutex<LinkedList<usize>>>);
+
+impl Deref for WakeQueue {
+    type Target = Mutex<LinkedList<usize>>;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
 
 impl WakeQueue {
+    #[inline]
     pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(LinkedList::new())))
     }
 
     #[inline(always)]
     pub(crate) fn enqueue(&self, idx: usize) {
-        self.0.lock().push_back(idx);
+        self.lock().push_back(idx);
     }
 }
