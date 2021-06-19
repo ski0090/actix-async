@@ -10,9 +10,6 @@ use crate::runtime::RuntimeService;
 use crate::util::channel::{OneshotReceiver, SendFuture};
 use crate::util::futures::LocalBoxFuture;
 
-/// default timeout for sending message
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Message request to actor with timeout setting.
 pub type MessageRequest<'a, A, R> =
     _MessageRequest<<A as Actor>::Runtime, SendFuture<'a, ActorMessage<A>>, R>;
@@ -33,7 +30,7 @@ pin_project_lite::pin_project! {
             fut: Fut,
             rx: OneshotReceiver<R>,
             #[pin]
-            timeout: RT::Sleep,
+            timeout: Option<RT::Sleep>,
             timeout_response: Option<Duration>
         },
         Response {
@@ -56,14 +53,14 @@ where
         _MessageRequest::Request {
             fut,
             rx,
-            timeout: RT::sleep(DEFAULT_TIMEOUT),
+            timeout: None,
             timeout_response: None,
         }
     }
 
     /// set the timeout duration for request.
     ///
-    /// Default to 10 seconds.
+    /// Default to no timeout.
     pub fn timeout(self, dur: Duration) -> Self {
         match self {
             _MessageRequest::Request {
@@ -74,7 +71,7 @@ where
             } => _MessageRequest::Request {
                 fut,
                 rx,
-                timeout: RT::sleep(dur),
+                timeout: Some(RT::sleep(dur)),
                 timeout_response,
             },
             _ => unreachable!(TIMEOUT_CONFIGURABLE),
@@ -123,11 +120,20 @@ where
                                     timeout_response,
                                 });
                             }
-                            _ => unreachable!(),
+                            // SAFETY:
+                            //
+                            // Replace always return the current variant of an enum
+                            // Which is Request in this case.
+                            _ => unsafe { core::hint::unreachable_unchecked() },
                         }
                     }
                     Poll::Pending => {
-                        return timeout.poll(cx).map(|_| Err(ActixAsyncError::SendTimeout))
+                        return match timeout.as_pin_mut() {
+                            Some(timeout) => {
+                                timeout.poll(cx).map(|_| Err(ActixAsyncError::SendTimeout))
+                            }
+                            None => Poll::Pending,
+                        }
                     }
                 },
                 MessageRequestProj::Response {
@@ -136,14 +142,12 @@ where
                 } => {
                     return match Pin::new(rx).poll(cx) {
                         Poll::Ready(res) => Poll::Ready(Ok(res?)),
-                        Poll::Pending => {
-                            if let Some(timeout) = timeout_response.as_pin_mut() {
-                                if timeout.poll(cx).is_ready() {
-                                    return Poll::Ready(Err(ActixAsyncError::ReceiveTimeout));
-                                }
-                            }
-                            Poll::Pending
-                        }
+                        Poll::Pending => match timeout_response.as_pin_mut() {
+                            Some(timeout) => timeout
+                                .poll(cx)
+                                .map(|_| Err(ActixAsyncError::ReceiveTimeout)),
+                            None => Poll::Pending,
+                        },
                     }
                 }
                 MessageRequestProj::PlaceHolder => unreachable!(),
