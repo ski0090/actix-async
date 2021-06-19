@@ -124,11 +124,13 @@ impl<A: Actor> Addr<A> {
     /// Weak version of Addr that can be upgraded.
     ///
     /// The upgrade would fail if no `Addr` is alive anywhere.
+    #[inline]
     pub fn downgrade(&self) -> WeakAddr<A> {
         WeakAddr(Sender::downgrade(&self.0))
     }
 
     /// Recipient bound to message type and not actor.
+    #[inline]
     pub fn recipient<M>(&self) -> Recipient<A::Runtime, M>
     where
         M: Message + Send,
@@ -141,6 +143,7 @@ impl<A: Actor> Addr<A> {
     ///
     /// *. `RecipientWeak` will stay usable as long as the actor and it's `Addr` are alive.
     /// It DOES NOT care if a strong Recipient is alive or not.
+    #[inline]
     pub fn recipient_weak<M>(&self) -> RecipientWeak<A::Runtime, M>
     where
         M: Message + Send,
@@ -160,6 +163,7 @@ impl<A: Actor> Addr<A> {
         }
     }
 
+    #[inline(always)]
     fn _send<M, F>(&self, f: F) -> MessageRequest<A, M::Result>
     where
         A: Handler<M>,
@@ -169,6 +173,7 @@ impl<A: Actor> Addr<A> {
         send(f, |msg| self.deref().send(msg))
     }
 
+    #[inline(always)]
     fn _send_box<M, F>(&self, f: F) -> BoxedMessageRequest<A::Runtime, M::Result>
     where
         A: Handler<M>,
@@ -193,7 +198,6 @@ impl<A: Actor> Addr<A> {
     }
 }
 
-#[inline(always)]
 fn send<A, M, F, FS, Fut>(f: F, fs: FS) -> _MessageRequest<A::Runtime, Fut, M::Result>
 where
     A: Actor + Handler<M>,

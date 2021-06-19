@@ -50,6 +50,7 @@ impl ContextJoinHandle {
 }
 
 impl<'c, A: Actor> Context<'c, A> {
+    #[inline(always)]
     pub(crate) fn new(
         state: &'c Cell<ActorState>,
         future_cache: &'c RefCell<Vec<FutureMessage<A>>>,

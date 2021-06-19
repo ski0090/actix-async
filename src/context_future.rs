@@ -84,16 +84,41 @@ impl TaskMut {
 
 pub(crate) struct ContextFuture<A: Actor> {
     act: A,
-    act_state: Cell<ActorState>,
-    act_rx: Receiver<ActorMessage<A>>,
+    ctx: ContextOwned<A>,
     queue: WakeQueue,
     pub(crate) cache_mut: TaskMut,
     pub(crate) cache_ref: TaskRef<A>,
-    future_cache: RefCell<Vec<FutureMessage<A>>>,
-    stream_cache: RefCell<Vec<StreamMessage<A>>>,
     drop_notify: Option<OneshotSender<()>>,
     state: ContextState,
     extra_poll: bool,
+}
+
+pub(crate) struct ContextOwned<A: Actor> {
+    state: Cell<ActorState>,
+    future_cache: RefCell<Vec<FutureMessage<A>>>,
+    stream_cache: RefCell<Vec<StreamMessage<A>>>,
+    rx: Receiver<ActorMessage<A>>,
+}
+
+impl<A: Actor> ContextOwned<A> {
+    pub(crate) fn new(rx: Receiver<ActorMessage<A>>) -> Self {
+        Self {
+            state: Cell::new(ActorState::Stop),
+            future_cache: RefCell::new(Vec::with_capacity(8)),
+            stream_cache: RefCell::new(Vec::with_capacity(8)),
+            rx,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_ref(&self) -> Context<'_, A> {
+        Context::new(
+            &self.state,
+            &self.future_cache,
+            &self.stream_cache,
+            &self.rx,
+        )
+    }
 }
 
 enum ContextState {
@@ -114,22 +139,13 @@ impl<A: Actor> Drop for ContextFuture<A> {
 
 impl<A: Actor> ContextFuture<A> {
     #[inline(always)]
-    pub(crate) fn new(
-        act: A,
-        act_state: Cell<ActorState>,
-        act_rx: Receiver<ActorMessage<A>>,
-        future_cache: RefCell<Vec<FutureMessage<A>>>,
-        stream_cache: RefCell<Vec<StreamMessage<A>>>,
-    ) -> Self {
+    pub(crate) fn new(act: A, ctx: ContextOwned<A>) -> Self {
         Self {
             act,
-            act_state,
-            act_rx,
+            ctx,
             queue: WakeQueue::new(),
             cache_mut: TaskMut::new(),
             cache_ref: TaskRef::new(),
-            future_cache,
-            stream_cache,
             drop_notify: None,
             state: ContextState::Starting,
             extra_poll: false,
@@ -138,12 +154,7 @@ impl<A: Actor> ContextFuture<A> {
 
     #[inline(always)]
     fn add_exclusive(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
-        let ctx = Context::new(
-            &self.act_state,
-            &self.future_cache,
-            &self.stream_cache,
-            &self.act_rx,
-        );
+        let ctx = self.ctx.as_ref();
         let task = msg.handle_wait(&mut self.act, ctx);
         self.cache_mut.add_task(task);
     }
@@ -152,12 +163,7 @@ impl<A: Actor> ContextFuture<A> {
     fn add_concurrent(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
         // when adding new concurrent message we always want an extra poll to register them.
         self.extra_poll = true;
-        let ctx = Context::new(
-            &self.act_state,
-            &self.future_cache,
-            &self.stream_cache,
-            &self.act_rx,
-        );
+        let ctx = self.ctx.as_ref();
         let task = msg.handle(&self.act, ctx);
         let idx = self.cache_ref.add_task(task);
         self.queue.enqueue(idx);
@@ -190,7 +196,8 @@ impl<A: Actor> ContextFuture<A> {
             }
             polled += 1;
             // TODO: there is a race condition happening so a hard break is scheduled.
-            // investigate the source.
+            // tokio task budget could be the cause of this but it's not possible to force
+            // an unconstrained task for generic runtime.
             if polled == len {
                 cx.waker().wake_by_ref();
                 break;
@@ -213,11 +220,11 @@ impl<A: Actor> ContextFuture<A> {
         this.extra_poll = false;
 
         // If context is stopped we stop dealing with future and stream messages.
-        if this.act_state.get() == ActorState::Running {
+        if this.ctx.state.get() == ActorState::Running {
             // poll future messages
             let mut i = 0;
-            while i < this.future_cache.get_mut().len() {
-                let cache = this.future_cache.get_mut();
+            while i < this.ctx.future_cache.get_mut().len() {
+                let cache = this.ctx.future_cache.get_mut();
                 match Pin::new(&mut cache[i]).poll(cx) {
                     Poll::Ready(msg) => {
                         cache.swap_remove(i);
@@ -241,12 +248,11 @@ impl<A: Actor> ContextFuture<A> {
 
             // poll stream message.
             let mut i = 0;
-            let mut extra_wake = false;
-            while i < this.stream_cache.get_mut().len() {
+            while i < this.ctx.stream_cache.get_mut().len() {
                 let mut polled = 0;
 
                 'stream: while let Poll::Ready(res) =
-                    Pin::new(&mut this.stream_cache.get_mut()[i]).poll_next(cx)
+                    Pin::new(&mut this.ctx.stream_cache.get_mut()[i]).poll_next(cx)
                 {
                     polled += 1;
                     match res {
@@ -259,7 +265,7 @@ impl<A: Actor> ContextFuture<A> {
                         }
                         // stream is either canceled by ContextJoinHandle or finished.
                         None => {
-                            this.stream_cache.get_mut().swap_remove(i);
+                            this.ctx.stream_cache.get_mut().swap_remove(i);
                             break 'stream;
                         }
                         _ => unreachable!(),
@@ -267,75 +273,79 @@ impl<A: Actor> ContextFuture<A> {
 
                     // force to yield when having 16 consecutive successful poll.
                     if polled == 16 {
-                        // set flag to true when force yield happens.
-                        // this is to reduce the overhead of multiple streams that enter
-                        // this branch and all call for wake up.
-                        extra_wake = true;
+                        // set extra poll flag to true when force yield happens.
+                        this.extra_poll = true;
                         break 'stream;
                     }
                 }
 
                 i += 1;
             }
-
-            if extra_wake {
-                cx.waker().wake_by_ref();
-            }
         }
 
         // actively drain receiver channel for incoming messages.
-        loop {
-            match Pin::new(&mut this.act_rx).poll_next(cx) {
+        while let Poll::Ready(msg) = Pin::new(&mut this.ctx.rx).poll_next(cx) {
+            match msg {
                 // new concurrent message. add it to cache_ref and continue.
-                Poll::Ready(Some(ActorMessage::Ref(msg))) => {
+                Some(ActorMessage::Ref(msg)) => {
                     this.add_concurrent(msg);
                 }
                 // new exclusive message. add it to cache_mut. No new messages should
                 // be accepted until this one is resolved.
-                Poll::Ready(Some(ActorMessage::Mut(msg))) => {
+                Some(ActorMessage::Mut(msg)) => {
                     this.add_exclusive(msg);
                     return self.poll_running(cx);
                 }
                 // stopping messages received.
-                Poll::Ready(Some(ActorMessage::State(state, notify))) => {
-                    // a oneshot sender to to notify the caller shut down is complete.
+                Some(ActorMessage::State(state, notify)) => {
+                    // a one shot sender to to notify the caller shut down is complete.
                     this.drop_notify = Some(notify);
-                    // stop context which would close the channel.
-                    this.act_rx.close();
-                    this.act_state.set(ActorState::StopGraceful);
-                    // goes to stopping state if it's a force shut down.
-                    // otherwise keep the loop until we drain the channel.
-                    if let ActorState::Stop = state {
-                        this.state = ContextState::Stopping;
-                        return self.poll_close(cx);
+                    // close the channel.
+                    this.ctx.rx.close();
+
+                    match state {
+                        ActorState::Stop => {
+                            // goes to stopping state if it's a force shut down.
+                            // otherwise keep the loop until we drain the channel.
+                            this.state = ContextState::Stopping;
+                            return self.poll_close(cx);
+                        }
+                        ActorState::StopGraceful => this.ctx.state.set(ActorState::StopGraceful),
+                        ActorState::Running => {
+                            unreachable!("Running state must not be sent through ActorMessage")
+                        }
                     }
                 }
                 // channel is closed
-                Poll::Ready(None) => {
-                    // stop context just in case.
-                    this.act_rx.close();
-                    this.act_state.set(ActorState::StopGraceful);
-                    // have new concurrent message. poll another round.
-                    return if this.extra_poll {
-                        self.poll_running(cx)
-                        // wait for unfinished messages to resolve.
-                    } else if this.have_cache() {
-                        Poll::Pending
-                    } else {
-                        // goes to stopping state.
-                        this.state = ContextState::Stopping;
-                        self.poll_close(cx)
-                    };
-                }
-                Poll::Pending => {
-                    // have new concurrent message. poll another round.
-                    return if this.extra_poll {
-                        self.poll_running(cx)
-                    } else {
-                        Poll::Pending
+                None => {
+                    return match this.ctx.state.replace(ActorState::StopGraceful) {
+                        ActorState::StopGraceful | ActorState::Running => {
+                            if this.extra_poll {
+                                // have new concurrent message. poll another round.
+                                self.poll_running(cx)
+                            } else if this.have_cache() {
+                                // wait for unfinished messages to resolve.
+                                Poll::Pending
+                            } else {
+                                // goes to stopping state.
+                                this.state = ContextState::Stopping;
+                                self.poll_close(cx)
+                            }
+                        }
+                        ActorState::Stop => {
+                            this.state = ContextState::Stopping;
+                            self.poll_close(cx)
+                        }
                     };
                 }
             }
+        }
+
+        // have new concurrent message. poll another round.
+        if this.extra_poll {
+            self.poll_running(cx)
+        } else {
+            Poll::Pending
         }
     }
 
@@ -345,17 +355,12 @@ impl<A: Actor> ContextFuture<A> {
             Some(task) => {
                 ready!(task.as_mut().poll(cx));
                 this.cache_mut.clear();
-                this.act_state.set(ActorState::Running);
+                this.ctx.state.set(ActorState::Running);
                 this.state = ContextState::Running;
                 self.poll_running(cx)
             }
             None => {
-                let ctx = Context::new(
-                    &this.act_state,
-                    &this.future_cache,
-                    &this.stream_cache,
-                    &this.act_rx,
-                );
+                let ctx = this.ctx.as_ref();
 
                 // SAFETY:
                 // Self reference is needed.
@@ -379,12 +384,7 @@ impl<A: Actor> ContextFuture<A> {
                 Poll::Ready(())
             }
             None => {
-                let ctx = Context::new(
-                    &this.act_state,
-                    &this.future_cache,
-                    &this.stream_cache,
-                    &this.act_rx,
-                );
+                let ctx = this.ctx.as_ref();
 
                 // SAFETY:
                 // Self reference is needed.

@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 
 use super::address::Addr;
 use super::context::Context;
-use super::context_future::ContextFuture;
+use super::context_future::{ContextFuture, ContextOwned};
 use super::message::ActorMessage;
 use super::runtime::RuntimeService;
 use super::util::{
@@ -140,20 +140,11 @@ pub trait Actor: Sized + 'static {
         Fut: Future<Output = Self>,
     {
         Self::spawn(async move {
-            use core::cell::{Cell, RefCell};
+            let ctx = ContextOwned::new(rx);
 
-            use alloc::vec::Vec;
+            let actor = f(ctx.as_ref()).await;
 
-            let future_cache = RefCell::new(Vec::with_capacity(8));
-            let stream_cache = RefCell::new(Vec::with_capacity(8));
-
-            let act_state = Cell::new(ActorState::Stop);
-
-            let ctx = Context::new(&act_state, &future_cache, &stream_cache, &rx);
-
-            let actor = f(ctx).await;
-
-            ContextFuture::new(actor, act_state, rx, future_cache, stream_cache).await;
+            ContextFuture::new(actor, ctx).await;
         });
     }
 }
