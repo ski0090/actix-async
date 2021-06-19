@@ -11,8 +11,10 @@ use crate::message::{
 };
 use crate::request::{BoxedMessageRequest, MessageRequest, _MessageRequest};
 use crate::runtime::RuntimeService;
-use crate::util::channel::{oneshot, OneshotSender, Receiver, Sender, WeakSender};
-use crate::util::futures::LocalBoxFuture;
+use crate::util::{
+    channel::{oneshot, OneshotSender, Receiver, Sender, WeakSender},
+    futures::LocalBoxFuture,
+};
 
 /// The message sink of `Actor` type. `Message` and boxed async blocks are sent to Actor through it.
 pub struct Addr<A>(Sender<ActorMessage<A>>);

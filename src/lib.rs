@@ -59,6 +59,7 @@
 extern crate alloc;
 
 mod actor;
+mod context_future;
 mod handler;
 mod macros;
 mod message;
@@ -74,12 +75,15 @@ pub mod prelude {
     pub use crate::context::ContextJoinHandle;
     pub use crate::error::ActixAsyncError;
     pub use crate::handler::Handler;
-    pub use crate::message;
     pub use crate::message::Message;
     pub use crate::runtime::RuntimeService;
     pub use crate::util::futures::LocalBoxFuture;
 
+    // message macro
+    pub use crate::message;
+
     #[cfg(feature = "tokio-rt")]
+    // tokio actor macro
     pub use crate::actor;
 
     #[cfg(feature = "tokio-rt")]
@@ -114,17 +118,20 @@ doc_comment::doctest!("../README.md");
 
 #[cfg(test)]
 mod test {
-    use core::pin::Pin;
-    use core::sync::atomic::{AtomicUsize, Ordering};
-    use core::task::{Context as StdContext, Poll};
-    use core::time::Duration;
+    use core::{
+        pin::Pin,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::{Context as StdContext, Poll},
+        time::Duration,
+    };
 
-    use alloc::boxed::Box;
-    use alloc::sync::Arc;
+    use alloc::{boxed::Box, sync::Arc};
 
     use async_trait::async_trait;
-    use tokio::task::LocalSet;
-    use tokio::time::{interval, sleep, Interval};
+    use tokio::{
+        task::LocalSet,
+        time::{interval, sleep, Interval},
+    };
 
     use crate as actix_async;
     use actix_async::prelude::*;

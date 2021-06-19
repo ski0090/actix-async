@@ -11,15 +11,15 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 use core::task::{Context as StdContext, Poll, Waker};
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-
+use alloc::{boxed::Box, vec::Vec};
 use cache_padded::CachePadded;
 use spin::{Mutex, MutexGuard};
 
 use crate::error::ActixAsyncError;
-use crate::util::futures::Stream;
-use crate::util::smart_pointer::{RefCounter, WeakRefCounter};
+use crate::util::{
+    futures::Stream,
+    smart_pointer::{RefCounter, WeakRefCounter},
+};
 
 struct Channel<T> {
     queue: Bounded<T>,

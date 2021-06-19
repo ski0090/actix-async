@@ -1,14 +1,19 @@
-use core::future::{ready, Future};
-use core::time::Duration;
+use core::{
+    future::{ready, Future},
+    time::Duration,
+};
 
 use alloc::boxed::Box;
 
-use crate::address::Addr;
-use crate::context::{Context, ContextFuture};
-use crate::message::ActorMessage;
-use crate::runtime::RuntimeService;
-use crate::util::channel::{channel, Receiver};
-use crate::util::futures::LocalBoxFuture;
+use super::address::Addr;
+use super::context::Context;
+use super::context_future::ContextFuture;
+use super::message::ActorMessage;
+use super::runtime::RuntimeService;
+use super::util::{
+    channel::{channel, Receiver},
+    futures::LocalBoxFuture,
+};
 
 const CHANNEL_CAP: usize = 256;
 

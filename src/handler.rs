@@ -1,13 +1,11 @@
-use core::future::Future;
-use core::mem::transmute;
+use core::{future::Future, mem};
 
 use alloc::boxed::Box;
 
-use crate::actor::Actor;
-use crate::context::Context;
-use crate::message::{FunctionMessage, FunctionMutMessage, Message, MessageContainer};
-use crate::util::channel::OneshotSender;
-use crate::util::futures::LocalBoxFuture;
+use super::actor::Actor;
+use super::context::Context;
+use super::message::{FunctionMessage, FunctionMutMessage, Message, MessageContainer};
+use super::util::{channel::OneshotSender, futures::LocalBoxFuture};
 
 /// Trait define how actor handle a message.
 /// # example:
@@ -164,8 +162,8 @@ where
             future transmute to static lifetime must be polled before next
             ContextWithActor.cache_mut is polled.
         */
-        let act = unsafe { transmute::<_, &'static A>(act) };
-        let ctx = unsafe { transmute::<_, Context<'static, A>>(ctx) };
+        let act = unsafe { mem::transmute::<_, &'static A>(act) };
+        let ctx = unsafe { mem::transmute::<_, Context<'static, A>>(ctx) };
 
         let fut = act.handle(msg, ctx);
 
@@ -189,8 +187,8 @@ where
             future transmute to static lifetime must be polled only when
             ContextWithActor.cache_ref is empty.
         */
-        let act = unsafe { transmute::<_, &'static mut A>(act) };
-        let ctx = unsafe { transmute::<_, Context<'static, A>>(ctx) };
+        let act = unsafe { mem::transmute::<_, &'static mut A>(act) };
+        let ctx = unsafe { mem::transmute::<_, Context<'static, A>>(ctx) };
 
         let fut = act.handle_wait(msg, ctx);
 

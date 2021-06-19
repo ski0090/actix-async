@@ -10,8 +10,7 @@ use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::drop_in_place;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::task::Waker;
-use core::task::{Context as StdContext, Poll};
+use core::task::{Context as StdContext, Poll, Waker};
 
 use crate::error::ActixAsyncError;
 use crate::util::smart_pointer::RefCounter;

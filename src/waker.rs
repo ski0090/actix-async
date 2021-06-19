@@ -22,7 +22,13 @@ impl ActorWaker {
 
 impl Wake for ActorWaker {
     fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
+        match Arc::try_unwrap(self) {
+            Ok(ActorWaker { queue, idx, waker }) => {
+                queue.enqueue(idx);
+                waker.wake();
+            }
+            Err(this) => this.wake_by_ref(),
+        }
     }
 
     fn wake_by_ref(self: &Arc<Self>) {

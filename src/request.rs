@@ -23,6 +23,7 @@ pub type BoxedMessageRequest<'a, RT, R> =
 
 pin_project_lite::pin_project! {
     #[project = MessageRequestProj]
+    #[project_replace = MessageRequestReplaceProj]
     pub enum _MessageRequest<RT, Fut, R>
     where
         RT: RuntimeService,
@@ -30,7 +31,7 @@ pin_project_lite::pin_project! {
         Request {
             #[pin]
             fut: Fut,
-            rx: Option<OneshotReceiver<R>>,
+            rx: OneshotReceiver<R>,
             #[pin]
             timeout: RT::Sleep,
             timeout_response: Option<Duration>
@@ -39,7 +40,9 @@ pin_project_lite::pin_project! {
             rx: OneshotReceiver<R>,
             #[pin]
             timeout_response: Option<RT::Sleep>
-        }
+        },
+        #[doc(hidden)]
+        PlaceHolder,
     }
 }
 
@@ -52,7 +55,7 @@ where
     pub(crate) fn new(fut: Fut, rx: OneshotReceiver<R>) -> Self {
         _MessageRequest::Request {
             fut,
-            rx: Some(rx),
+            rx,
             timeout: RT::sleep(DEFAULT_TIMEOUT),
             timeout_response: None,
         }
@@ -106,20 +109,22 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
         loop {
             match self.as_mut().project() {
-                MessageRequestProj::Request {
-                    fut,
-                    rx,
-                    timeout,
-                    timeout_response,
-                } => match fut.poll(cx)? {
+                MessageRequestProj::Request { fut, timeout, .. } => match fut.poll(cx)? {
                     Poll::Ready(()) => {
-                        let rx = rx.take().unwrap();
-                        let timeout_response = timeout_response.take().map(RT::sleep);
-
-                        self.set(_MessageRequest::Response {
-                            rx,
-                            timeout_response,
-                        });
+                        match self.as_mut().project_replace(_MessageRequest::PlaceHolder) {
+                            MessageRequestReplaceProj::Request {
+                                rx,
+                                timeout_response,
+                                ..
+                            } => {
+                                let timeout_response = timeout_response.map(RT::sleep);
+                                self.set(_MessageRequest::Response {
+                                    rx,
+                                    timeout_response,
+                                });
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                     Poll::Pending => {
                         return timeout.poll(cx).map(|_| Err(ActixAsyncError::SendTimeout))
@@ -141,6 +146,7 @@ where
                         }
                     }
                 }
+                MessageRequestProj::PlaceHolder => unreachable!(),
             }
         }
     }

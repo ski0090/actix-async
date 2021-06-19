@@ -2,7 +2,7 @@
 #[macro_export]
 macro_rules! actor {
     ($ty: ty) => {
-        impl Actor for $ty {
+        impl actix_async::prelude::Actor for $ty {
             type Runtime = actix_async::prelude::TokioRuntime;
         }
     };

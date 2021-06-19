@@ -1,17 +1,21 @@
-use core::future::Future;
-use core::marker::PhantomData;
-use core::pin::Pin;
-use core::task::{Context as StdContext, Poll};
-use core::time::Duration;
+use core::{
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context as StdContext, Poll},
+    time::Duration,
+};
 
 use alloc::boxed::Box;
 
-use crate::actor::{Actor, ActorState};
-use crate::handler::{Handler, MessageHandler};
-use crate::runtime::RuntimeService;
-use crate::util::channel::{OneshotReceiver, OneshotSender};
-use crate::util::futures::{ready, LocalBoxStream, Stream};
-use crate::util::smart_pointer::RefCounter;
+use super::actor::{Actor, ActorState};
+use super::handler::{Handler, MessageHandler};
+use super::runtime::RuntimeService;
+use super::util::{
+    channel::{OneshotReceiver, OneshotSender},
+    futures::{ready, LocalBoxStream, Stream},
+    smart_pointer::RefCounter,
+};
 
 /// trait define types goes through actor's `Addr` to it's `Handler`
 ///
