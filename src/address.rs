@@ -83,8 +83,14 @@ impl<A: Actor> Addr<A> {
 
     /// send a message to actor and ignore the result.
     ///
-    /// *. `do_send` is just a `send` put into `RuntimeService::spawn`. The message does not
-    /// bypass actor's channel capacity or have a higher priority.
+    /// This is a synchronous operation that would always queue to actor's mailbox.
+    ///
+    /// It would bypass `Actor::size_hint` api and would ignore error when doing so.
+    /// (Error only happen when actor is closed.)
+    ///
+    /// *. No guarantee timing of message processing. Actor would use it's size_hint to limit
+    /// concurrent async work it runs. All additional messages would remain in mailbox until
+    /// it has free slot for processing.
     pub fn do_send<M>(&self, msg: M)
     where
         M: Message + Send,
@@ -93,10 +99,15 @@ impl<A: Actor> Addr<A> {
         self._do_send(|| ActorMessage::new_ref(msg, None))
     }
 
-    /// send a exclusive message to actor and ignore the result.
+    /// send an exclusive message to actor and ignore the result.
     ///
-    /// *. `do_wait` is just a `wait` put into `RuntimeService::spawn`. The message does not
-    /// bypass actor's channel capacity or have a higher priority.
+    /// This is a synchronous operation that would always queue to actor's mailbox.
+    ///
+    /// It would bypass `Actor::size_hint` api and would ignore error when doing so.
+    /// (Error only happen when actor is closed.)
+    ///
+    /// *. No guarantee timing of message processing. Actor can only run one exclusive message at
+    /// once. All additional messages would remain in mailbox until it has free slot for processing.
     pub fn do_wait<M>(&self, msg: M)
     where
         M: Message + Send,
@@ -190,11 +201,7 @@ impl<A: Actor> Addr<A> {
         F: FnOnce() -> ActorMessage<A> + 'static,
     {
         message_send_check::<M>();
-        let this = self.clone();
-        <<A as Actor>::Runtime as RuntimeService>::spawn(async move {
-            let msg = f();
-            let _ = this.deref().send(msg).await;
-        });
+        let _ = self.deref().do_send(f());
     }
 }
 

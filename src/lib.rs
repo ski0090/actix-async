@@ -119,18 +119,20 @@ doc_comment::doctest!("../README.md");
 #[cfg(test)]
 mod test {
     use core::{
+        cell::Cell,
         pin::Pin,
         sync::atomic::{AtomicUsize, Ordering},
         task::{Context as StdContext, Poll},
         time::Duration,
     };
 
-    use alloc::{boxed::Box, sync::Arc};
+    use alloc::{boxed::Box, rc::Rc, sync::Arc};
 
     use async_trait::async_trait;
+    use futures_util::StreamExt;
     use tokio::{
         task::LocalSet,
-        time::{interval, sleep, Interval},
+        time::{interval, sleep, Instant, Interval},
     };
 
     use crate as actix_async;
@@ -144,7 +146,7 @@ mod test {
 
                 let res = addr.stop(true).await;
                 assert!(res.is_ok());
-                assert!(addr.send(TestMessage).await.is_err());
+                assert!(addr.send(TestMsg).await.is_err());
             })
             .await
     }
@@ -208,27 +210,27 @@ mod test {
             .run_until(async {
                 let addr = TestActor::default().start();
 
-                let re = addr.recipient::<TestMessage>();
+                let re = addr.recipient::<TestMsg>();
 
-                let res = re.send(TestMessage).await;
+                let res = re.send(TestMsg).await;
                 assert_eq!(996, res.unwrap());
 
-                let res = re.wait(TestMessage).await;
+                let res = re.wait(TestMsg).await;
                 assert_eq!(251, res.unwrap());
 
                 drop(re);
 
-                let re = addr.recipient_weak::<TestMessage>();
+                let re = addr.recipient_weak::<TestMsg>();
 
-                let res = re.send(TestMessage).await;
+                let res = re.send(TestMsg).await;
                 assert_eq!(996, res.unwrap());
 
-                let res = re.wait(TestMessage).await;
+                let res = re.wait(TestMsg).await;
                 assert_eq!(251, res.unwrap());
 
                 drop(addr);
 
-                let res = re.send(TestMessage).await;
+                let res = re.send(TestMsg).await;
 
                 assert_eq!(res, Err(ActixAsyncError::Closed));
             })
@@ -245,11 +247,11 @@ mod test {
                 drop(res);
 
                 sleep(Duration::from_millis(300)).await;
-                let res = addr.send(TestMessage).await.unwrap();
+                let res = addr.send(TestMsg).await.unwrap();
                 assert_eq!(996, res);
 
                 sleep(Duration::from_millis(300)).await;
-                let res = addr.send(TestMessage).await.unwrap();
+                let res = addr.send(TestMsg).await.unwrap();
                 assert_eq!(997, res);
 
                 let res = addr.send(TestDelayMessage).await.unwrap();
@@ -258,7 +260,7 @@ mod test {
                 res.cancel();
 
                 sleep(Duration::from_millis(300)).await;
-                let res = addr.send(TestMessage).await.unwrap();
+                let res = addr.send(TestMsg).await.unwrap();
                 assert_eq!(997, res);
             })
             .await
@@ -276,7 +278,7 @@ mod test {
                 }
 
                 impl futures_util::stream::Stream for TestStream {
-                    type Item = TestMessage;
+                    type Item = TestMsg;
 
                     fn poll_next(
                         self: Pin<&mut Self>,
@@ -287,7 +289,7 @@ mod test {
                             return Poll::Pending;
                         }
                         this.state.fetch_add(1, Ordering::SeqCst);
-                        Poll::Ready(Some(TestMessage))
+                        Poll::Ready(Some(TestMsg))
                     }
                 }
 
@@ -315,6 +317,43 @@ mod test {
             })
             .await
     }
+
+    #[tokio::test]
+    async fn test_capacity() {
+        LocalSet::new()
+            .run_until(async {
+                let state = Rc::new(Cell::new(0));
+
+                let addr = TestCapActor(state.clone()).start();
+
+                let addr_clone = addr.clone();
+                tokio::task::spawn_local(async move {
+                    let mut futs = futures_util::stream::FuturesUnordered::new();
+
+                    for _ in 0..4 {
+                        futs.push(addr_clone.send(TestCapMsg));
+                    }
+
+                    while futs.next().await.is_some() {}
+                });
+
+                let now = Instant::now();
+
+                tokio::task::yield_now().await;
+
+                assert_eq!(state.get(), 4);
+
+                addr.do_send(TestMsg);
+
+                let res = addr.send(TestMsg).await.unwrap();
+
+                assert_eq!(res, 5);
+                assert_eq!(state.get(), 6);
+                assert!(now.elapsed() > Duration::from_secs(3));
+            })
+            .await
+    }
+
     //
     // #[tokio::test]
     // async fn test_panic_recovery() {
@@ -347,17 +386,17 @@ mod test {
         }
     }
 
-    struct TestMessage;
+    struct TestMsg;
 
-    message!(TestMessage, usize);
+    message!(TestMsg, usize);
 
     #[async_trait(?Send)]
-    impl Handler<TestMessage> for TestActor {
-        async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> usize {
+    impl Handler<TestMsg> for TestActor {
+        async fn handle(&self, _: TestMsg, _: Context<'_, Self>) -> usize {
             self.0
         }
 
-        async fn handle_wait(&mut self, _: TestMessage, _: Context<'_, Self>) -> usize {
+        async fn handle_wait(&mut self, _: TestMsg, _: Context<'_, Self>) -> usize {
             251
         }
     }
@@ -439,6 +478,36 @@ mod test {
     impl Handler<TestPanicMsg> for TestActor {
         async fn handle(&self, _: TestPanicMsg, _: Context<'_, Self>) {
             panic!("This is a purpose panic to test actor recovery");
+        }
+    }
+
+    struct TestCapActor(Rc<Cell<usize>>);
+
+    impl Actor for TestCapActor {
+        type Runtime = TokioRuntime;
+
+        fn size_hint() -> usize {
+            4
+        }
+    }
+
+    struct TestCapMsg;
+    message!(TestCapMsg, ());
+
+    #[async_trait(?Send)]
+    impl Handler<TestMsg> for TestCapActor {
+        async fn handle(&self, _: TestMsg, _: Context<'_, Self>) -> usize {
+            let current = self.0.get();
+            self.0.set(current + 1);
+            current
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl Handler<TestCapMsg> for TestCapActor {
+        async fn handle(&self, _: TestCapMsg, _: Context<'_, Self>) {
+            self.0.set(self.0.get() + 1);
+            sleep(Duration::from_secs(3)).await
         }
     }
 }

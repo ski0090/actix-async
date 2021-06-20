@@ -10,7 +10,7 @@ use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::drop_in_place;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::task::{Context as StdContext, Poll, Waker};
+use core::task::{Context, Poll, Waker};
 
 use crate::error::ActixAsyncError;
 use crate::util::smart_pointer::RefCounter;
@@ -223,7 +223,7 @@ impl<T> OneshotReceiver<T> {
 impl<T> Future for OneshotReceiver<T> {
     type Output = Result<T, ActixAsyncError>;
 
-    fn poll(self: Pin<&mut Self>, ctx: &mut StdContext) -> Poll<Result<T, ActixAsyncError>> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Result<T, ActixAsyncError>> {
         let this = Pin::into_inner(self);
         match this.handle_state(this.inner.state()) {
             Poll::Pending => {}

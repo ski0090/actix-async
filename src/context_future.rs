@@ -175,6 +175,16 @@ impl<A: Actor> ContextFuture<A> {
     }
 
     #[inline(always)]
+    fn cacheable(&self) -> bool {
+        let len = self.cache_ref.len();
+        if self.cache_mut.is_some() {
+            len + 1 < A::size_hint()
+        } else {
+            len < A::size_hint()
+        }
+    }
+
+    #[inline(always)]
     fn poll_running(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
 
@@ -184,6 +194,7 @@ impl<A: Actor> ContextFuture<A> {
         // this actor future and it would be scheduled to wake up again.
         let len = this.cache_ref.len();
         let mut polled = 0;
+
         while let Some(idx) = this.queue.try_lock().and_then(|mut l| l.pop_front()) {
             if let Some(task) = this.cache_ref.get_mut(idx) {
                 // construct actor waker from the waker actor received.
@@ -283,21 +294,22 @@ impl<A: Actor> ContextFuture<A> {
             }
         }
 
-        // actively drain receiver channel for incoming messages.
-        while let Poll::Ready(msg) = Pin::new(&mut this.ctx.rx).poll_next(cx) {
-            match msg {
+        // Actively drain receiver channel for incoming messages.
+        // Do not poll on receiver when actor is at full capacity.
+        while this.cacheable() {
+            match Pin::new(&mut this.ctx.rx).poll_next(cx) {
                 // new concurrent message. add it to cache_ref and continue.
-                Some(ActorMessage::Ref(msg)) => {
+                Poll::Ready(Some(ActorMessage::Ref(msg))) => {
                     this.add_concurrent(msg);
                 }
                 // new exclusive message. add it to cache_mut. No new messages should
                 // be accepted until this one is resolved.
-                Some(ActorMessage::Mut(msg)) => {
+                Poll::Ready(Some(ActorMessage::Mut(msg))) => {
                     this.add_exclusive(msg);
                     return self.poll_running(cx);
                 }
                 // stopping messages received.
-                Some(ActorMessage::State(state, notify)) => {
+                Poll::Ready(Some(ActorMessage::State(state, notify))) => {
                     // a one shot sender to to notify the caller shut down is complete.
                     this.drop_notify = Some(notify);
                     // close the channel.
@@ -317,7 +329,7 @@ impl<A: Actor> ContextFuture<A> {
                     }
                 }
                 // channel is closed
-                None => {
+                Poll::Ready(None) => {
                     return match this.ctx.state.replace(ActorState::StopGraceful) {
                         ActorState::StopGraceful | ActorState::Running => {
                             if this.extra_poll {
@@ -338,6 +350,7 @@ impl<A: Actor> ContextFuture<A> {
                         }
                     };
                 }
+                Poll::Pending => break,
             }
         }
 

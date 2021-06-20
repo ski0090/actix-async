@@ -76,7 +76,7 @@ async fn main() {
 
             let mut fut = FuturesUnordered::new();
 
-            for _ in 0..999 {
+            for _ in 0..256 {
                 fut.push(addr.send(Msg));
             }
 
