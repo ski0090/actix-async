@@ -1,19 +1,12 @@
-use core::{
-    future::{ready, Future},
-    time::Duration,
-};
+use core::future::{ready, Future};
 
 use alloc::boxed::Box;
 
 use super::address::Addr;
 use super::context::Context;
 use super::context_future::{ContextFuture, ContextOwned};
-use super::message::ActorMessage;
 use super::runtime::RuntimeService;
-use super::util::{
-    channel::{channel, Receiver},
-    futures::LocalBoxFuture,
-};
+use super::util::{channel::channel, futures::LocalBoxFuture};
 
 const CHANNEL_CAP: usize = 256;
 
@@ -106,15 +99,73 @@ pub trait Actor: Sized + 'static {
     fn create_async<F, Fut>(f: F) -> Addr<Self>
     where
         F: for<'c> FnOnce(Context<'c, Self>) -> Fut + 'static,
-        Fut: Future<Output = Self>,
+        Fut: Future<Output = Self> + 'static,
     {
-        let (tx, rx) = channel(Self::size_hint());
+        let (tx, fut) = _create_context(f);
 
-        let tx = Addr::new(tx);
-
-        Self::_start(rx, f);
+        <Self::Runtime as RuntimeService>::spawn(async move {
+            let ctx_fut = fut.await;
+            ctx_fut.await;
+        });
 
         tx
+    }
+
+    /// create actor with async closure and expose it's [`ContextFuture`](super::context_future::ContextFuture).
+    /// ContextFuture can be used to delay the start of actor and take control of when and where it would be polled.
+    /// # example:
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use actix_async::prelude::*;
+    /// use actix_async::{actor, message};
+    /// use futures_util::FutureExt;
+    ///
+    /// struct TestActor;
+    /// actor!(TestActor);
+    ///
+    /// impl TestActor {
+    ///     async fn test(&mut self) -> usize {
+    ///         996
+    ///     }
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     tokio::task::LocalSet::new().run_until(async {
+    ///         let (addr, fut) = TestActor::create_context(|ctx| {
+    ///             // *. notice context can not move to async block. so you have to use it from
+    ///             // outside if you would.
+    ///             let _ctx = ctx;
+    ///             async {
+    ///                 // run async code
+    ///                 tokio::time::sleep(Duration::from_secs(1)).await;
+    ///                 // return an instance of actor.
+    ///                 TestActor
+    ///             }
+    ///         });
+    ///         
+    ///         // await on the fut to get ContextFuture.
+    ///         let ctx_fut = fut.await;
+    ///       
+    ///         // manual spawn ContextFuture to tokio runtime.     
+    ///         tokio::task::spawn_local(ctx_fut);
+    ///
+    ///         // run async closure with actor and it's context.
+    ///         let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
+    ///         assert_eq!(996, res.unwrap());
+    ///     })
+    ///     .await
+    /// }
+    /// ```
+    fn create_context<F, Fut>(f: F) -> (Addr<Self>, LocalBoxFuture<'static, ContextFuture<Self>>)
+    where
+        F: for<'c> FnOnce(Context<'c, Self>) -> Fut + 'static,
+        Fut: Future<Output = Self> + 'static,
+    {
+        let (tx, fut) = _create_context(f);
+
+        (tx, Box::pin(fut))
     }
 
     /// capacity of the actor's channel. Limit the max count of on flight messages.
@@ -123,30 +174,21 @@ pub trait Actor: Sized + 'static {
     fn size_hint() -> usize {
         CHANNEL_CAP
     }
+}
 
-    #[doc(hidden)]
-    fn spawn<F: Future<Output = ()> + 'static>(f: F) {
-        Self::Runtime::spawn(f)
-    }
+fn _create_context<A, F, Fut>(f: F) -> (Addr<A>, impl Future<Output = ContextFuture<A>>)
+where
+    A: Actor,
+    F: for<'c> FnOnce(Context<'c, A>) -> Fut + 'static,
+    Fut: Future<Output = A>,
+{
+    let (tx, rx) = channel(A::size_hint());
 
-    #[doc(hidden)]
-    fn sleep(dur: Duration) -> <Self::Runtime as RuntimeService>::Sleep {
-        Self::Runtime::sleep(dur)
-    }
+    let tx = Addr::new(tx);
 
-    fn _start<F, Fut>(rx: Receiver<ActorMessage<Self>>, f: F)
-    where
-        F: for<'c> FnOnce(Context<'c, Self>) -> Fut + 'static,
-        Fut: Future<Output = Self>,
-    {
-        Self::spawn(async move {
-            let ctx = ContextOwned::new(rx);
+    let ctx = ContextOwned::new(rx);
 
-            let actor = f(ctx.as_ref()).await;
-
-            ContextFuture::new(actor, ctx).await;
-        });
-    }
+    (tx, ContextFuture::start(f, ctx))
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]

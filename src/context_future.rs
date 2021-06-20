@@ -82,7 +82,7 @@ impl TaskMut {
     }
 }
 
-pub(crate) struct ContextFuture<A: Actor> {
+pub struct ContextFuture<A: Actor> {
     act: A,
     ctx: ContextOwned<A>,
     queue: WakeQueue,
@@ -138,8 +138,13 @@ impl<A: Actor> Drop for ContextFuture<A> {
 }
 
 impl<A: Actor> ContextFuture<A> {
-    #[inline(always)]
-    pub(crate) fn new(act: A, ctx: ContextOwned<A>) -> Self {
+    pub(crate) async fn start<F, Fut>(f: F, ctx: ContextOwned<A>) -> Self
+    where
+        F: for<'c> FnOnce(Context<'c, A>) -> Fut + 'static,
+        Fut: Future<Output = A>,
+    {
+        let act = f(ctx.as_ref()).await;
+
         Self {
             act,
             ctx,

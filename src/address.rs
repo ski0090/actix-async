@@ -191,7 +191,7 @@ impl<A: Actor> Addr<A> {
     {
         message_send_check::<M>();
         let this = self.clone();
-        A::spawn(async move {
+        <<A as Actor>::Runtime as RuntimeService>::spawn(async move {
             let msg = f();
             let _ = this.deref().send(msg).await;
         });

@@ -38,11 +38,11 @@ pub trait Message: 'static {
     type Result: Send + 'static;
 }
 
-impl<M: Message> Message for RefCounter<M> {
+impl<M: Message + ?Sized> Message for RefCounter<M> {
     type Result = M::Result;
 }
 
-impl<M: Message> Message for Box<M> {
+impl<M: Message + ?Sized> Message for Box<M> {
     type Result = M::Result;
 }
 
@@ -177,7 +177,7 @@ pub(crate) struct FutureMessage<A: Actor> {
 impl<A: Actor> FutureMessage<A> {
     pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessage<A>) -> Self {
         Self {
-            delay: Box::pin(A::sleep(dur)),
+            delay: Box::pin(<A::Runtime as RuntimeService>::sleep(dur)),
             handle: Some(rx),
             msg: Some(msg),
         }
@@ -216,7 +216,7 @@ impl<A: Actor> IntervalMessage<A> {
     pub(crate) fn new(dur: Duration, rx: OneshotReceiver<()>, msg: ActorMessageClone<A>) -> Self {
         Self {
             dur,
-            delay: Box::pin(A::sleep(dur)),
+            delay: Box::pin(<A::Runtime as RuntimeService>::sleep(dur)),
             handle: Some(rx),
             msg,
         }
@@ -241,7 +241,7 @@ impl<A: Actor> Stream for IntervalMessage<A> {
 
         ready!(Pin::new(&mut this.delay).poll(cx));
 
-        this.delay = Box::pin(A::sleep(this.dur));
+        this.delay = Box::pin(<A::Runtime as RuntimeService>::sleep(this.dur));
         // wake self one more time to register the new sleep.
         cx.waker().wake_by_ref();
         Poll::Ready(Some(this.msg.clone()))

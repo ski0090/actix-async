@@ -22,6 +22,9 @@ impl ActorWaker {
 
 impl Wake for ActorWaker {
     fn wake(self: Arc<Self>) {
+        // try to take ownership of actor waker. This would reduce the overhead
+        // of task wake up if waker is not shared between multiple tasks.
+        // (Which is a regular seen use case.)
         match Arc::try_unwrap(self) {
             Ok(ActorWaker { queue, idx, waker }) => {
                 queue.enqueue(idx);

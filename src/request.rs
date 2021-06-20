@@ -1,14 +1,19 @@
-use core::future::Future;
-use core::pin::Pin;
-use core::task::{Context as StdContext, Poll};
-use core::time::Duration;
+use core::{
+    future::Future,
+    hint,
+    pin::Pin,
+    task::{Context as StdContext, Poll},
+    time::Duration,
+};
 
-use crate::actor::Actor;
-use crate::error::ActixAsyncError;
-use crate::message::ActorMessage;
-use crate::runtime::RuntimeService;
-use crate::util::channel::{OneshotReceiver, SendFuture};
-use crate::util::futures::LocalBoxFuture;
+use super::actor::Actor;
+use super::error::ActixAsyncError;
+use super::message::ActorMessage;
+use super::runtime::RuntimeService;
+use super::util::{
+    channel::{OneshotReceiver, SendFuture},
+    futures::LocalBoxFuture,
+};
 
 /// Message request to actor with timeout setting.
 pub type MessageRequest<'a, A, R> =
@@ -124,7 +129,7 @@ where
                             //
                             // Replace always return the current variant of an enum
                             // Which is Request in this case.
-                            _ => unsafe { core::hint::unreachable_unchecked() },
+                            _ => unsafe { hint::unreachable_unchecked() },
                         }
                     }
                     Poll::Pending => {
