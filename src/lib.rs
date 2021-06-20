@@ -420,10 +420,6 @@ mod test {
 
     message!(TestDelayMessage, ContextJoinHandle);
 
-    // impl Message for TestDelayMessage {
-    //     type Result = ContextJoinHandle;
-    // }
-
     #[async_trait(?Send)]
     impl Handler<TestDelayMessage> for TestActor {
         async fn handle(&self, _: TestDelayMessage, ctx: Context<'_, Self>) -> ContextJoinHandle {

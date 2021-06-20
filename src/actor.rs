@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 
 use super::address::Addr;
 use super::context::Context;
-use super::context_future::{ContextFuture, ContextOwned};
+use super::context_future::{ContextFuture, ContextInner};
 use super::runtime::RuntimeService;
 use super::util::{channel::channel, futures::LocalBoxFuture};
 
@@ -186,7 +186,7 @@ where
 
     let tx = Addr::new(tx);
 
-    let ctx = ContextOwned::new(rx);
+    let ctx = ContextInner::new(rx);
 
     (tx, ContextFuture::start(f, ctx))
 }

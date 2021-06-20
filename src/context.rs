@@ -1,9 +1,8 @@
-use core::{
-    cell::{Cell, RefCell},
-    time::Duration,
-};
+use core::time::Duration;
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
+
+use crate::context_future::ContextInner;
 
 use super::actor::{Actor, ActorState};
 use super::address::Addr;
@@ -13,7 +12,7 @@ use super::message::{
     IntervalMessage, Message, StreamContainer, StreamMessage,
 };
 use super::util::{
-    channel::{oneshot, OneshotReceiver, OneshotSender, Receiver},
+    channel::{oneshot, OneshotReceiver, OneshotSender},
     futures::{LocalBoxFuture, Stream},
 };
 
@@ -22,10 +21,7 @@ use super::util::{
 ///
 /// Used to mutate the state of actor and add additional tasks to actor.
 pub struct Context<'a, A: Actor> {
-    state: &'a Cell<ActorState>,
-    future_cache: &'a RefCell<Vec<FutureMessage<A>>>,
-    stream_cache: &'a RefCell<Vec<StreamMessage<A>>>,
-    rx: &'a Receiver<ActorMessage<A>>,
+    inner: &'a ContextInner<A>,
 }
 
 /// a join handle can be used to cancel a spawned async task like interval closure and stream
@@ -51,18 +47,8 @@ impl ContextJoinHandle {
 
 impl<'c, A: Actor> Context<'c, A> {
     #[inline(always)]
-    pub(crate) fn new(
-        state: &'c Cell<ActorState>,
-        future_cache: &'c RefCell<Vec<FutureMessage<A>>>,
-        stream_cache: &'c RefCell<Vec<StreamMessage<A>>>,
-        rx: &'c Receiver<ActorMessage<A>>,
-    ) -> Self {
-        Context {
-            state,
-            future_cache,
-            stream_cache,
-            rx,
-        }
+    pub(crate) fn new(inner: &'c ContextInner<A>) -> Self {
+        Context { inner }
     }
 
     /// run interval concurrent closure on context. `Handler::handle` will be called.
@@ -97,7 +83,7 @@ impl<'c, A: Actor> Context<'c, A> {
         let msg = f(rx);
         let msg = StreamMessage::new_interval(msg);
 
-        self.stream_cache.borrow_mut().push(msg);
+        self.inner.stream_cache.borrow_mut().push(msg);
 
         ContextJoinHandle { handle }
     }
@@ -133,20 +119,20 @@ impl<'c, A: Actor> Context<'c, A> {
         F: FnOnce(OneshotReceiver<()>) -> FutureMessage<A>,
     {
         let (handle, rx) = oneshot();
-        self.future_cache.borrow_mut().push(f(rx));
+        self.inner.future_cache.borrow_mut().push(f(rx));
         ContextJoinHandle { handle }
     }
 
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
     pub fn stop(&self) {
-        self.rx.close();
-        self.state.set(ActorState::StopGraceful);
+        self.inner.rx.close();
+        self.inner.state.set(ActorState::StopGraceful);
     }
 
     /// get the address of actor from context.
     pub fn address(&self) -> Option<Addr<A>> {
-        Addr::from_recv(self.rx).ok()
+        Addr::from_recv(&self.inner.rx).ok()
     }
 
     /// add a stream to context. multiple stream can be added to one context.
@@ -222,7 +208,7 @@ impl<'c, A: Actor> Context<'c, A> {
         let (handle, rx) = oneshot();
         let stream = StreamContainer::new(stream, rx, f);
         let msg = StreamMessage::new_boxed(stream);
-        self.stream_cache.borrow_mut().push(msg);
+        self.inner.stream_cache.borrow_mut().push(msg);
         ContextJoinHandle { handle }
     }
 }

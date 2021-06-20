@@ -84,7 +84,7 @@ impl TaskMut {
 
 pub struct ContextFuture<A: Actor> {
     act: A,
-    ctx: ContextOwned<A>,
+    ctx: ContextInner<A>,
     queue: WakeQueue,
     pub(crate) cache_mut: TaskMut,
     pub(crate) cache_ref: TaskRef<A>,
@@ -93,14 +93,14 @@ pub struct ContextFuture<A: Actor> {
     extra_poll: bool,
 }
 
-pub(crate) struct ContextOwned<A: Actor> {
-    state: Cell<ActorState>,
-    future_cache: RefCell<Vec<FutureMessage<A>>>,
-    stream_cache: RefCell<Vec<StreamMessage<A>>>,
-    rx: Receiver<ActorMessage<A>>,
+pub(crate) struct ContextInner<A: Actor> {
+    pub(crate) state: Cell<ActorState>,
+    pub(crate) future_cache: RefCell<Vec<FutureMessage<A>>>,
+    pub(crate) stream_cache: RefCell<Vec<StreamMessage<A>>>,
+    pub(crate) rx: Receiver<ActorMessage<A>>,
 }
 
-impl<A: Actor> ContextOwned<A> {
+impl<A: Actor> ContextInner<A> {
     pub(crate) fn new(rx: Receiver<ActorMessage<A>>) -> Self {
         Self {
             state: Cell::new(ActorState::Stop),
@@ -112,12 +112,7 @@ impl<A: Actor> ContextOwned<A> {
 
     #[inline(always)]
     pub(crate) fn as_ref(&self) -> Context<'_, A> {
-        Context::new(
-            &self.state,
-            &self.future_cache,
-            &self.stream_cache,
-            &self.rx,
-        )
+        Context::new(self)
     }
 }
 
@@ -138,7 +133,7 @@ impl<A: Actor> Drop for ContextFuture<A> {
 }
 
 impl<A: Actor> ContextFuture<A> {
-    pub(crate) async fn start<F, Fut>(f: F, ctx: ContextOwned<A>) -> Self
+    pub(crate) async fn start<F, Fut>(f: F, ctx: ContextInner<A>) -> Self
     where
         F: for<'c> FnOnce(Context<'c, A>) -> Fut + 'static,
         Fut: Future<Output = A>,
