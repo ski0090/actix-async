@@ -1,7 +1,7 @@
 [actix](https://crates.io/crates/actix) API(mostly) with async/await friendly.
 
 ### Requirement:
-- MSRV: rustc 1.51 and above
+- MSRV: rustc 1.51
 
 ### Example:
 ```rust

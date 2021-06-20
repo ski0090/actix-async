@@ -27,7 +27,7 @@ spin = { version = "0.9.0", default-features = false, features = ["use_ticket_mu
 tokio = { version = "1.7.1", optional = true }
 
 [dev-dependencies]
-actix = "0.12"
+actix = { version = "0.12", default-features = false }
 async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
 async-trait = "0.1.42"
 doc-comment = "0.3.3"

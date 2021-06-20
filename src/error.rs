@@ -43,6 +43,6 @@ impl Debug for ActixAsyncError {
 
 impl Display for ActixAsyncError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "({})", self)
+        write!(f, "{:?}", self)
     }
 }

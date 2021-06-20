@@ -168,7 +168,9 @@ pub trait Actor: Sized + 'static {
         (tx, Box::pin(fut))
     }
 
-    /// capacity of the actor's channel. Limit the max count of on flight messages.
+    /// capacity of the actor's channel and actor's task queue.
+    ///
+    /// Limit the max count of in flight messages and concurrent async tasks.
     ///
     /// Default to `256`.
     fn size_hint() -> usize {
