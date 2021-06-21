@@ -1,10 +1,6 @@
 use core::{ops::Deref, task::Waker};
 
-#[cfg(not(feature = "std"))]
 use alloc::{collections::LinkedList, task::Wake};
-
-#[cfg(feature = "std")]
-use std::{collections::LinkedList, task::Wake};
 
 use crate::util::smart_pointer::{Lock, RefCounter};
 

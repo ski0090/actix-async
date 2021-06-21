@@ -8,7 +8,6 @@ use core::{
     task::{Context as StdContext, Poll},
 };
 
-#[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec::Vec};
 use slab::Slab;
 

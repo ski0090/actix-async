@@ -1,6 +1,5 @@
 use core::future::{ready, Future};
 
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use super::address::Addr;

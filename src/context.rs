@@ -1,6 +1,5 @@
 use core::time::Duration;
 
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use crate::context_future::ContextInner;

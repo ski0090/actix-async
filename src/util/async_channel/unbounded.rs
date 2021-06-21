@@ -7,8 +7,10 @@ use core::{
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
+use alloc::boxed::Box;
+
 #[cfg(not(feature = "std"))]
-use {alloc::boxed::Box, core::hint::spin_loop as yield_now};
+use core::hint::spin_loop as yield_now;
 
 #[cfg(feature = "std")]
 use std::thread::yield_now;

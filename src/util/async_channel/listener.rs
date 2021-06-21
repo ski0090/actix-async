@@ -13,7 +13,6 @@ use core::{
     task::{Context, Poll},
 };
 
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use crate::util::smart_pointer::{Lock, LockGuard, RefCounter};

@@ -9,14 +9,13 @@ pub(crate) mod channel {
 pub(crate) mod futures;
 
 pub(crate) mod smart_pointer {
+    use alloc::sync::{Arc, Weak};
+
     #[cfg(feature = "std")]
-    use std::sync::{Arc, Mutex, MutexGuard, Weak};
+    use std::sync::{Mutex, MutexGuard};
 
     #[cfg(not(feature = "std"))]
-    use {
-        alloc::sync::{Arc, Weak},
-        spin::{Mutex, MutexGuard},
-    };
+    use spin::{Mutex, MutexGuard};
 
     pub(crate) type RefCounter<T> = Arc<T>;
     pub(crate) type WeakRefCounter<T> = Weak<T>;
