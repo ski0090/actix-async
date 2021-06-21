@@ -1,5 +1,6 @@
 use core::ops::Deref;
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use crate::actor::{Actor, ActorState};

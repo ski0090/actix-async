@@ -4,13 +4,15 @@
    async_oneshot::Sender
 */
 
-use core::cell::UnsafeCell;
-use core::future::Future;
-use core::mem::MaybeUninit;
-use core::pin::Pin;
-use core::ptr::drop_in_place;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use core::task::{Context, Poll, Waker};
+use core::{
+    cell::UnsafeCell,
+    future::Future,
+    mem::MaybeUninit,
+    pin::Pin,
+    ptr::drop_in_place,
+    sync::atomic::{AtomicUsize, Ordering},
+    task::{Context, Poll, Waker},
+};
 
 use crate::error::ActixAsyncError;
 use crate::util::smart_pointer::RefCounter;

@@ -24,6 +24,7 @@ pub type BoxedMessageRequest<'a, RT, R> =
     _MessageRequest<RT, LocalBoxFuture<'a, Result<(), ActixAsyncError>>, R>;
 
 pin_project_lite::pin_project! {
+    #[doc(hidden)]
     #[project = MessageRequestProj]
     #[project_replace = MessageRequestReplaceProj]
     pub enum _MessageRequest<RT, Fut, R>
@@ -43,7 +44,6 @@ pin_project_lite::pin_project! {
             #[pin]
             timeout_response: Option<RT::Sleep>
         },
-        #[doc(hidden)]
         PlaceHolder,
     }
 }

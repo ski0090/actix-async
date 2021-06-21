@@ -1,7 +1,12 @@
 use core::{ops::Deref, task::Waker};
 
-use alloc::{collections::LinkedList, sync::Arc, task::Wake};
-use spin::Mutex;
+#[cfg(not(feature = "std"))]
+use alloc::{collections::LinkedList, task::Wake};
+
+#[cfg(feature = "std")]
+use std::{collections::LinkedList, task::Wake};
+
+use crate::util::smart_pointer::{Lock, RefCounter};
 
 pub(crate) struct ActorWaker {
     queue: WakeQueue,
@@ -11,8 +16,8 @@ pub(crate) struct ActorWaker {
 
 impl ActorWaker {
     #[inline(always)]
-    pub(crate) fn new(queued: &WakeQueue, idx: usize, waker: &Waker) -> Arc<Self> {
-        Arc::new(Self {
+    pub(crate) fn new(queued: &WakeQueue, idx: usize, waker: &Waker) -> RefCounter<Self> {
+        RefCounter::new(Self {
             queue: WakeQueue::clone(queued),
             idx,
             waker: Waker::clone(waker),
@@ -21,11 +26,11 @@ impl ActorWaker {
 }
 
 impl Wake for ActorWaker {
-    fn wake(self: Arc<Self>) {
+    fn wake(self: RefCounter<Self>) {
         // try to take ownership of actor waker. This would reduce the overhead
         // of task wake up if waker is not shared between multiple tasks.
         // (Which is a regular seen use case.)
-        match Arc::try_unwrap(self) {
+        match RefCounter::try_unwrap(self) {
             Ok(ActorWaker { queue, idx, waker }) => {
                 queue.enqueue(idx);
                 waker.wake();
@@ -34,7 +39,7 @@ impl Wake for ActorWaker {
         }
     }
 
-    fn wake_by_ref(self: &Arc<Self>) {
+    fn wake_by_ref(self: &RefCounter<Self>) {
         let ActorWaker {
             ref queue,
             ref idx,
@@ -48,10 +53,10 @@ impl Wake for ActorWaker {
 }
 
 #[derive(Clone)]
-pub(crate) struct WakeQueue(Arc<Mutex<LinkedList<usize>>>);
+pub(crate) struct WakeQueue(RefCounter<Lock<LinkedList<usize>>>);
 
 impl Deref for WakeQueue {
-    type Target = Mutex<LinkedList<usize>>;
+    type Target = Lock<LinkedList<usize>>;
 
     fn deref(&self) -> &Self::Target {
         &*self.0
@@ -61,7 +66,7 @@ impl Deref for WakeQueue {
 impl WakeQueue {
     #[inline]
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(LinkedList::new())))
+        Self(RefCounter::new(Lock::new(LinkedList::new())))
     }
 
     #[inline(always)]

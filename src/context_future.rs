@@ -1,13 +1,15 @@
-use core::cell::{Cell, RefCell};
-use core::future::Future;
-use core::marker::PhantomData;
-use core::mem::transmute;
-use core::ops::{Deref, DerefMut};
-use core::pin::Pin;
-use core::task::{Context as StdContext, Poll};
+use core::{
+    cell::{Cell, RefCell},
+    future::Future,
+    marker::PhantomData,
+    mem,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    task::{Context as StdContext, Poll},
+};
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{boxed::Box, vec::Vec};
 use slab::Slab;
 
 use super::actor::{Actor, ActorState};
@@ -379,7 +381,7 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_start transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let task = unsafe { transmute(this.act.on_start(ctx)) };
+                let task = unsafe { mem::transmute(this.act.on_start(ctx)) };
 
                 this.task_mut.add_task(task);
 
@@ -403,7 +405,7 @@ impl<A: Actor> ContextFuture<A> {
                 // Self reference is needed.
                 // on_stop transmute to static lifetime must be resolved before dropping
                 // or move Context and Actor.
-                let task = unsafe { transmute(this.act.on_stop(ctx)) };
+                let task = unsafe { mem::transmute(this.act.on_stop(ctx)) };
 
                 this.task_mut.add_task(task);
 

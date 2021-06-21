@@ -1,5 +1,5 @@
 /// Copy/paste from concurrent-queue crate.
-/// The goal is to use only bounded channel and remove std::thread::yield_now.
+/// The goal is to use only bounded channel and make std::thread::yield_now optional.
 use core::{
     cell::UnsafeCell,
     mem::MaybeUninit,
@@ -7,7 +7,11 @@ use core::{
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
-use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
+use {alloc::boxed::Box, core::hint::spin_loop as yield_now};
+
+#[cfg(feature = "std")]
+use std::thread::yield_now;
 
 use cache_padded::CachePadded;
 
@@ -49,7 +53,9 @@ impl<T> Slot<T> {
 
     /// Waits until a value is written into the slot.
     fn wait_write(&self) {
-        while self.state.load(Ordering::Acquire) & WRITE == 0 {}
+        while self.state.load(Ordering::Acquire) & WRITE == 0 {
+            yield_now();
+        }
     }
 }
 
@@ -80,6 +86,7 @@ impl<T> Block<T> {
             if !next.is_null() {
                 return next;
             }
+            yield_now();
         }
     }
 
@@ -154,6 +161,8 @@ impl<T> Unbounded<T> {
 
             // If we reached the end of the block, wait until the next one is installed.
             if offset == BLOCK_CAP {
+                yield_now();
+
                 tail = self.tail.index.load(Ordering::Acquire);
                 block = self.tail.block.load(Ordering::Acquire);
                 continue;
@@ -229,6 +238,8 @@ impl<T> Unbounded<T> {
 
             // If we reached the end of the block, wait until the next one is installed.
             if offset == BLOCK_CAP {
+                yield_now();
+
                 head = self.head.index.load(Ordering::Acquire);
                 block = self.head.block.load(Ordering::Acquire);
                 continue;
@@ -258,6 +269,8 @@ impl<T> Unbounded<T> {
 
             // The block can be null here only if the first push operation is in progress.
             if block.is_null() {
+                yield_now();
+
                 head = self.head.index.load(Ordering::Acquire);
                 block = self.head.block.load(Ordering::Acquire);
                 continue;
@@ -305,42 +318,6 @@ impl<T> Unbounded<T> {
             }
         }
     }
-
-    /// Returns the number of items in the queue.
-    // pub fn len(&self) -> usize {
-    //     loop {
-    //         // Load the tail index, then load the head index.
-    //         let mut tail = self.tail.index.load(Ordering::SeqCst);
-    //         let mut head = self.head.index.load(Ordering::SeqCst);
-
-    //         // If the tail index didn't change, we've got consistent indices to work with.
-    //         if self.tail.index.load(Ordering::SeqCst) == tail {
-    //             // Erase the lower bits.
-    //             tail &= !((1 << SHIFT) - 1);
-    //             head &= !((1 << SHIFT) - 1);
-
-    //             // Fix up indices if they fall onto block ends.
-    //             if (tail >> SHIFT) & (LAP - 1) == LAP - 1 {
-    //                 tail = tail.wrapping_add(1 << SHIFT);
-    //             }
-    //             if (head >> SHIFT) & (LAP - 1) == LAP - 1 {
-    //                 head = head.wrapping_add(1 << SHIFT);
-    //             }
-
-    //             // Rotate indices so that head falls into the first block.
-    //             let lap = (head >> SHIFT) / LAP;
-    //             tail = tail.wrapping_sub((lap * LAP) << SHIFT);
-    //             head = head.wrapping_sub((lap * LAP) << SHIFT);
-
-    //             // Remove the lower bits.
-    //             tail >>= SHIFT;
-    //             head >>= SHIFT;
-
-    //             // Return the difference minus the number of blocks between tail and head.
-    //             return tail - head - tail / LAP;
-    //         }
-    //     }
-    // }
 
     /// Closes the queue.
     ///

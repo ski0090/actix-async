@@ -53,9 +53,9 @@
 //! }
 //! ```
 
-#![no_std]
 #![forbid(unused_imports, unused_mut, unused_variables)]
 
+#[cfg(not(feature = "std"))]
 extern crate alloc;
 
 mod actor;
@@ -126,7 +126,11 @@ mod test {
         time::Duration,
     };
 
+    #[cfg(not(feature = "std"))]
     use alloc::{boxed::Box, rc::Rc, sync::Arc};
+
+    #[cfg(feature = "std")]
+    use std::{rc::Rc, sync::Arc};
 
     use async_trait::async_trait;
     use futures_util::StreamExt;

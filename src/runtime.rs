@@ -1,5 +1,4 @@
-use core::future::Future;
-use core::time::Duration;
+use core::{future::Future, time::Duration};
 
 /// Runtime trait for running actor on various runtimes.
 /// # example:

@@ -1,5 +1,6 @@
 use core::{future::Future, mem};
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use super::actor::Actor;

@@ -1,5 +1,5 @@
 /// Copy/paste from event-listener crate
-/// The goal is to remove blocking listener that would need std features.
+/// The goal is to make blocking listener that would need std features optional.
 use core::{
     cell::{Cell, UnsafeCell},
     fmt,
@@ -13,6 +13,7 @@ use core::{
     task::{Context, Poll},
 };
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use crate::util::smart_pointer::{Lock, LockGuard, RefCounter};

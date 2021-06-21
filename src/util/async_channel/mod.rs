@@ -5,15 +5,17 @@
 mod listener;
 mod unbounded;
 
-use core::fmt;
-use core::future::Future;
-use core::pin::Pin;
-use core::sync::atomic::{fence, AtomicUsize, Ordering};
-use core::task::{Context, Poll};
+use core::{
+    fmt,
+    future::Future,
+    pin::Pin,
+    sync::atomic::{fence, AtomicUsize, Ordering},
+    task::{Context, Poll},
+};
 
 use crate::error::ActixAsyncError;
 use crate::util::{
-    futures::Stream,
+    futures::{ready, Stream},
     smart_pointer::{RefCounter, WeakRefCounter},
 };
 
@@ -148,19 +150,19 @@ impl<T> Clone for Sender<T> {
     }
 }
 
-pin_project_lite::pin_project! {
-    pub struct SendFuture<'a, T> {
-        sender: &'a Sender<T>,
-        listener: Option<EventListener>,
-        msg: Option<T>,
-    }
+pub struct SendFuture<'a, T> {
+    sender: &'a Sender<T>,
+    listener: Option<EventListener>,
+    msg: Option<T>,
 }
+
+impl<T> Unpin for SendFuture<'_, T> {}
 
 impl<T> Future for SendFuture<'_, T> {
     type Output = Result<(), ActixAsyncError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+        let this = self.get_mut();
 
         let mut msg = this.msg.take().unwrap();
 
@@ -186,7 +188,7 @@ impl<T> Future for SendFuture<'_, T> {
             match this.listener.as_mut() {
                 None => {
                     // Start listening and then try receiving again.
-                    *this.listener = Some(this.sender.channel.send_ops.listen());
+                    this.listener = Some(this.sender.channel.send_ops.listen());
                 }
                 Some(l) => {
                     // Wait for a notification.
@@ -196,7 +198,7 @@ impl<T> Future for SendFuture<'_, T> {
                             continue;
                         }
                         Poll::Pending => {
-                            *this.msg = Some(msg);
+                            this.msg = Some(msg);
                             return Poll::Pending;
                         }
                     }
@@ -265,7 +267,7 @@ impl<T> Stream for Receiver<T> {
         loop {
             // If this stream is listening for events, first wait for a notification.
             if let Some(listener) = self.listener.as_mut() {
-                futures_core::ready!(Pin::new(listener).poll(cx));
+                ready!(Pin::new(listener).poll(cx));
                 self.listener = None;
             }
 
