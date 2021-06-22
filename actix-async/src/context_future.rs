@@ -207,11 +207,11 @@ impl<A: Actor> ContextFuture<A> {
 
         // poll concurrent messages and collect task index that is ready.
 
-        // only try to get the lock. When lock is held by others it means they are about to wake up
-        // this actor future and it would be scheduled to wake up again.
         let len = this.task_ref.len();
         let mut polled = 0;
 
+        // only try to get the lock. When lock is held by others it means they are about to wake up
+        // this actor future and it would be scheduled to wake up again.
         while let Some(idx) = this.queue.try_lock().and_then(|mut l| l.pop_front()) {
             if let Some(task) = this.task_ref.get_mut(idx) {
                 // construct actor waker from the waker actor received.

@@ -1,6 +1,6 @@
 use core::{ops::Deref, task::Waker};
 
-use alloc::{collections::LinkedList, task::Wake};
+use alloc::{collections::VecDeque, task::Wake};
 
 use crate::util::smart_pointer::{Lock, RefCounter};
 
@@ -49,10 +49,10 @@ impl Wake for ActorWaker {
 }
 
 #[derive(Clone)]
-pub(crate) struct WakeQueue(RefCounter<Lock<LinkedList<usize>>>);
+pub(crate) struct WakeQueue(RefCounter<Lock<VecDeque<usize>>>);
 
 impl Deref for WakeQueue {
-    type Target = Lock<LinkedList<usize>>;
+    type Target = Lock<VecDeque<usize>>;
 
     fn deref(&self) -> &Self::Target {
         &*self.0
@@ -62,7 +62,7 @@ impl Deref for WakeQueue {
 impl WakeQueue {
     #[inline]
     pub(crate) fn new() -> Self {
-        Self(RefCounter::new(Lock::new(LinkedList::new())))
+        Self(RefCounter::new(Lock::new(VecDeque::new())))
     }
 
     #[inline(always)]
