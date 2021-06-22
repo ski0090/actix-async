@@ -20,7 +20,9 @@ pub(crate) mod smart_pointer {
     pub(crate) type RefCounter<T> = Arc<T>;
     pub(crate) type WeakRefCounter<T> = Weak<T>;
 
+    #[derive(Debug)]
     pub(crate) struct Lock<T>(Mutex<T>);
+
     pub(crate) type LockGuard<'g, T> = MutexGuard<'g, T>;
 
     impl<T> Lock<T> {

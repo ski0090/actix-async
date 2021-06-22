@@ -50,7 +50,7 @@
 //! }
 //! ```
 
-#![forbid(unused_imports, unused_mut, unused_variables)]
+#![forbid(unused_imports)]
 
 extern crate alloc;
 
@@ -108,6 +108,9 @@ pub mod prelude {
 }
 pub mod request;
 pub mod runtime;
+
+#[cfg(feature = "tokio-rt")]
+pub mod supervisor;
 
 #[cfg(feature = "macros")]
 pub use {

@@ -3,4 +3,4 @@ pub(crate) use futures_core::{
     stream::{LocalBoxStream, Stream},
 };
 
-pub use futures_core::future::LocalBoxFuture;
+pub use futures_core::future::{BoxFuture, LocalBoxFuture};
