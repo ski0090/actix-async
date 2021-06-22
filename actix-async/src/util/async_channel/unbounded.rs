@@ -17,7 +17,7 @@ use std::thread::yield_now;
 
 use cache_padded::CachePadded;
 
-use super::{full_fence, TryRecvError, TrySendError};
+use super::{full_fence, TryRecvError};
 
 // Bits indicating the state of a slot:
 // * If a value has been written into the slot, `WRITE` is set.
@@ -147,7 +147,7 @@ impl<T> Unbounded<T> {
     }
 
     /// Pushes an item into the queue.
-    pub fn push(&self, value: T) -> Result<(), TrySendError<T>> {
+    pub fn push(&self, value: T) -> Result<(), T> {
         let mut tail = self.tail.index.load(Ordering::Acquire);
         let mut block = self.tail.block.load(Ordering::Acquire);
         let mut next_block = None;
@@ -155,7 +155,7 @@ impl<T> Unbounded<T> {
         loop {
             // Check if the queue is closed.
             if tail & MARK_BIT != 0 {
-                return Err(TrySendError::Closed(value));
+                return Err(value);
             }
 
             // Calculate the offset of the index into the block.

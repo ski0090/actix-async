@@ -13,6 +13,12 @@ use core::{
     task::{Context, Poll},
 };
 
+#[cfg(feature = "std")]
+use std::thread::yield_now;
+
+#[cfg(not(feature = "std"))]
+use core::hint::spin_loop as yield_now;
+
 use crate::error::ActixAsyncError;
 use crate::util::{
     futures::{ready, Stream},
@@ -45,15 +51,6 @@ impl<T> Channel<T> {
         } else {
             false
         }
-    }
-
-    fn avail(&self) -> bool {
-        self.in_queue.load(Ordering::Acquire) < self.cap
-    }
-
-    /// return the remaining available count before increment.
-    fn enqueue(&self) -> usize {
-        self.cap - self.in_queue.fetch_add(1, Ordering::Release)
     }
 
     /// return if there is available count.
@@ -90,7 +87,7 @@ pub struct Sender<T> {
 }
 
 impl<T> Sender<T> {
-    pub fn do_send(&self, msg: T) -> Result<(), TrySendError<T>> {
+    pub fn do_send(&self, msg: T) -> Result<(), T> {
         self.channel.queue.push(msg).map(|()| {
             // Notify all blocked streams.
             self.channel.stream_ops.notify(usize::MAX);
@@ -164,27 +161,46 @@ impl<T> Future for SendFuture<'_, T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        let mut msg = this.msg.take().unwrap();
+        let msg = this.msg.take().unwrap();
+
+        let cap = this.sender.channel.cap;
+        let mut in_queue = this.sender.channel.in_queue.load(Ordering::Acquire);
 
         loop {
-            if this.sender.channel.avail() {
-                match this.sender.do_send(msg) {
-                    Ok(()) => {
-                        // If the capacity is larger than 1, notify another blocked send operation.
-                        match this.sender.channel.enqueue() {
-                            1 => {}
-                            _ => this.sender.channel.send_ops.notify(1),
-                        }
-                        return Poll::Ready(Ok(()));
+            if in_queue < cap {
+                match this.sender.channel.in_queue.compare_exchange_weak(
+                    in_queue,
+                    in_queue + 1,
+                    Ordering::SeqCst,
+                    Ordering::Acquire,
+                ) {
+                    Ok(cur) => {
+                        return match this.sender.do_send(msg) {
+                            Ok(_) => {
+                                // If the capacity is larger than 1, notify another blocked send operation.
+                                match cap - cur {
+                                    1 => {}
+                                    _ => this.sender.channel.send_ops.notify(1),
+                                }
+                                Poll::Ready(Ok(()))
+                            }
+                            // TODO: It's possible to give message's ownership back to caller.
+                            Err(_msg) => Poll::Ready(Err(ActixAsyncError::Closed)),
+                        };
                     }
-                    Err(TrySendError::Closed(_)) => {
-                        return Poll::Ready(Err(ActixAsyncError::Closed))
+                    Err(cur) => {
+                        in_queue = cur;
+
+                        // another thread increment the counter already. yield thread
+                        // and try again. (This path should be very short)
+                        yield_now();
+                        continue;
                     }
-                    Err(TrySendError::Full(m)) => msg = m,
                 }
             }
 
-            // Sending failed - now start listening for notifications or wait for one.
+            // Sending failed because channel is full
+            // now start listening for notifications or wait for one.
             match this.listener.as_mut() {
                 None => {
                     // Start listening and then try receiving again.
@@ -332,11 +348,6 @@ impl<T> Clone for Receiver<T> {
             listener: None,
         }
     }
-}
-
-pub enum TrySendError<T> {
-    Full(T),
-    Closed(T),
 }
 
 pub enum TryRecvError {

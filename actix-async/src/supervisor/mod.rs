@@ -4,7 +4,7 @@ use core::{future::Future, mem, time::Duration};
 
 use tokio::{runtime::Handle, select};
 
-use super::actor::Actor;
+use super::actor::{Actor, ActorState};
 use super::address::Addr;
 use super::context::Context;
 use super::context_future::{ContextFuture, ContextInner};
@@ -57,7 +57,7 @@ impl Supervisor {
         Fut: Future<Output = A> + 'static,
         A: Actor,
     {
-        let (tx, rx) = channel(A::size_hint() * num);
+        let (tx, rx) = channel(A::size_hint());
 
         let addr = Addr::new(tx);
 
@@ -69,11 +69,20 @@ impl Supervisor {
             let _ = self
                 .tx
                 .send(Box::pin(async move {
-                    let ctx = ContextInner::new(rx);
-                    tokio::task::spawn_local(async move {
-                        let fut = ContextFuture::start(func, ctx).await;
-                        fut.await
-                    });
+                    loop {
+                        let func = func.clone();
+                        let rx = rx.clone();
+                        let ctx = ContextInner::new(rx);
+                        let _ = tokio::task::spawn_local(async move {
+                            let fut = ContextFuture::start(func, ctx).await;
+                            fut.await
+                        });
+
+                        match A::supervised() {
+                            ActorState::Running => continue,
+                            _ => break,
+                        }
+                    }
                 }) as _)
                 .await;
         }
