@@ -1,7 +1,9 @@
 use core::{future::Future, time::Duration};
 
 /// Runtime trait for running actor on various runtimes.
-/// # example:
+///
+/// # Examples
+///
 /// ```rust
 /// use std::future::Future;
 /// use std::pin::Pin;

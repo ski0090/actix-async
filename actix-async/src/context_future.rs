@@ -87,8 +87,8 @@ pub struct ContextFuture<A: Actor> {
     act: A,
     ctx: ContextInner<A>,
     queue: WakeQueue,
-    pub(crate) task_mut: TaskMut,
-    pub(crate) task_ref: TaskRef<A>,
+    task_mut: TaskMut,
+    task_ref: TaskRef<A>,
     drop_notify: Option<OneshotSender<()>>,
     state: ContextState,
     extra_poll: bool,
@@ -179,7 +179,7 @@ impl<A: Actor> ContextFuture<A> {
     fn can_add_task(&self) -> bool {
         let len = self.task_ref.len();
         if self.task_mut.is_some() {
-            len + 1 < A::size_hint()
+            panic!("ContextFuture must not poll address receiver when there is TaskMut alive")
         } else {
             len < A::size_hint()
         }
@@ -211,7 +211,7 @@ impl<A: Actor> ContextFuture<A> {
             // tokio task budget could be the cause of this but it's not possible to force
             // an unconstrained task for generic runtime.
             if polled == len {
-                cx.waker().wake_by_ref();
+                this.extra_poll = true;
                 break;
             }
         }
@@ -227,9 +227,6 @@ impl<A: Actor> ContextFuture<A> {
             }
             None => {}
         }
-
-        // reset extra_poll
-        this.extra_poll = false;
 
         // If context is stopped we stop dealing with future and stream messages.
         if this.ctx.state.get() == ActorState::Running {
@@ -331,23 +328,18 @@ impl<A: Actor> ContextFuture<A> {
                 }
                 // channel is closed
                 Poll::Ready(None) => {
-                    return match this.ctx.state.replace(ActorState::StopGraceful) {
-                        ActorState::StopGraceful | ActorState::Running => {
-                            if this.extra_poll {
-                                // have new concurrent message. poll another round.
-                                self.poll_running(cx)
-                            } else if this.have_task() {
-                                // wait for unfinished messages to resolve.
-                                Poll::Pending
-                            } else {
-                                // goes to stopping state.
-                                this.state = ContextState::Stopping;
-                                self.poll_close(cx)
-                            }
+                    match this.ctx.state.replace(ActorState::StopGraceful) {
+                        ActorState::StopGraceful | ActorState::Running
+                            if this.extra_poll || this.have_task() =>
+                        {
+                            // have new concurrent message.
+                            // or wait for unfinished messages to resolve.
+                            // In these cases break loop enter pending state.
+                            break;
                         }
-                        ActorState::Stop => {
+                        _ => {
                             this.state = ContextState::Stopping;
-                            self.poll_close(cx)
+                            return self.poll_close(cx);
                         }
                     };
                 }
@@ -355,12 +347,15 @@ impl<A: Actor> ContextFuture<A> {
             }
         }
 
-        // have new concurrent message. poll another round.
+        // an extra poll is needed to make progress.
+        // schedule it with runtime and goes to pending.
+        // This is to prevent a busy actor future that starving other tasks.
         if this.extra_poll {
-            self.poll_running(cx)
-        } else {
-            Poll::Pending
+            this.extra_poll = false;
+            cx.waker().wake_by_ref();
         }
+
+        Poll::Pending
     }
 
     fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
