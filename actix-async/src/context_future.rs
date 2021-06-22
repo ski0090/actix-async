@@ -155,6 +155,10 @@ impl<A: Actor> ContextFuture<A> {
 
     #[inline(always)]
     fn add_task_mut(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
+        // Set extra_poll to false and there MUST be an instant extra poll
+        // after adding a TaskMut.
+        self.extra_poll = false;
+
         let ctx = self.ctx.as_ref();
         let task = msg.handle_wait(&mut self.act, ctx);
         self.task_mut.add_task(task);
@@ -183,6 +187,18 @@ impl<A: Actor> ContextFuture<A> {
         } else {
             len < A::size_hint()
         }
+    }
+
+    fn poll_extra_poll(&mut self, cx: &mut StdContext<'_>) -> Poll<()> {
+        // an extra poll is needed to make progress.
+        // schedule it with runtime and goes to pending.
+        // This is to prevent a busy actor future that starving other tasks.
+        if self.extra_poll {
+            self.extra_poll = false;
+            cx.waker().wake_by_ref();
+        }
+
+        Poll::Pending
     }
 
     #[inline(always)]
@@ -219,12 +235,13 @@ impl<A: Actor> ContextFuture<A> {
         // try to poll exclusive message.
         match this.task_mut.as_mut() {
             // still have concurrent messages. finish them.
-            Some(_) if !this.task_ref.is_empty() => return Poll::Pending,
+            Some(_) if !this.task_ref.is_empty() => return this.poll_extra_poll(cx),
             // poll exclusive message and remove it when success.
-            Some(fut_mut) => {
-                ready!(fut_mut.as_mut().poll(cx));
-                this.task_mut.clear();
-            }
+            Some(fut_mut) => match fut_mut.as_mut().poll(cx) {
+                Poll::Ready(_) => this.task_mut.clear(),
+                Poll::Pending => return this.poll_extra_poll(cx),
+            },
+
             None => {}
         }
 
@@ -347,15 +364,7 @@ impl<A: Actor> ContextFuture<A> {
             }
         }
 
-        // an extra poll is needed to make progress.
-        // schedule it with runtime and goes to pending.
-        // This is to prevent a busy actor future that starving other tasks.
-        if this.extra_poll {
-            this.extra_poll = false;
-            cx.waker().wake_by_ref();
-        }
-
-        Poll::Pending
+        this.poll_extra_poll(cx)
     }
 
     fn poll_start(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
