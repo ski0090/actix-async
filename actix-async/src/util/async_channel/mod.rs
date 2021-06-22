@@ -274,6 +274,10 @@ impl<T> Receiver<T> {
     pub fn close(&self) -> bool {
         self.channel.close()
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.channel.queue.is_closed()
+    }
 }
 
 impl<T> Stream for Receiver<T> {

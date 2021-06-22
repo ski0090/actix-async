@@ -2,6 +2,9 @@
 //
 // * This is mainly focus on how well an actor can schedule multiple async tasks in concurrent.
 // Time count how long all tasks are finished. Polled count how many polls are done by runtime.
+//
+// actix-async would respect the rule of rust future and only wake up task that can make progress
+// so it has close to minimal polling times for resolving a future.
 
 use std::cell::Cell;
 use std::future::Future;

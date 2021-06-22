@@ -43,9 +43,11 @@ pub trait Actor: Sized + 'static {
 
     #[cfg(feature = "tokio-rt")]
     /// A method called when supervisor detected a stopped actor future.
+    ///
     /// Return `ActorState::Running` to re-construct the actor future and keep it running.
-    /// Return other to stop the supervised actor future.
-    fn supervised() -> ActorState {
+    /// Return everything else to stop the supervised actor future.
+    fn supervised(state: super::supervisor::SupervisedState) -> ActorState {
+        let _ = state;
         ActorState::Stop
     }
 

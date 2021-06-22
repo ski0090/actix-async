@@ -1,5 +1,7 @@
 mod worker;
 
+pub use tokio::task::JoinError;
+
 use core::{future::Future, mem, time::Duration};
 
 use tokio::{runtime::Handle, select};
@@ -16,6 +18,39 @@ use super::util::{
 
 use self::worker::Worker;
 
+/// A supervisor can be used to manage multiple actors and/or multiple instances of the same actor
+/// type on a threaded tokio runtime.
+///
+/// # Examples
+///
+/// ```rust
+/// # use actix_async::{prelude::*, supervisor::Supervisor};
+/// # use futures_util::FutureExt;
+///
+/// // actor type and impl.
+/// struct MyActor;
+/// actor!(MyActor);
+///
+/// impl MyActor {
+///     async fn handle(&self, ctx: Context<'_, Self>) -> usize {
+///         996
+///     }
+/// }
+///
+/// // start a multi-thread tokio runtime
+/// #[tokio::main]
+/// async fn main() {
+///     // construct a supervisor with 2 worker threads.
+///     let supervisor = Supervisor::builder().workers(2).build();
+///     // start one instance of actor.
+///     let addr = supervisor.start(1, |_| async { MyActor }).await;
+///
+///     // run a closure with the started address
+///     let res = addr.run(|act, ctx| act.handle(ctx).boxed_local()).await.unwrap();
+///
+///     assert_eq!(res, 996);
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct Supervisor {
     join_handles: RefCounter<Lock<Vec<Worker>>>,
@@ -71,15 +106,19 @@ impl Supervisor {
                 .send(Box::pin(async move {
                     loop {
                         let func = func.clone();
-                        let rx = rx.clone();
-                        let ctx = ContextInner::new(rx);
-                        let _ = tokio::task::spawn_local(async move {
+                        let rx_clone = rx.clone();
+                        let handle = tokio::task::spawn_local(async move {
+                            let ctx = ContextInner::new(rx_clone);
                             let fut = ContextFuture::start(func, ctx).await;
                             fut.await
                         });
 
-                        match A::supervised() {
-                            ActorState::Running => continue,
+                        let res = handle.await;
+
+                        let state = SupervisedState { error: res.err() };
+
+                        match A::supervised(state) {
+                            ActorState::Running if !rx.is_closed() => continue,
                             _ => break,
                         }
                     }
@@ -133,5 +172,17 @@ impl SupervisorBuilder {
             tx,
             shutdown_timeout: self.shutdown_timeout,
         }
+    }
+}
+
+/// peek into the output of supervised actor future after it finished.
+pub struct SupervisedState {
+    error: Option<JoinError>,
+}
+
+impl SupervisedState {
+    /// Take the error if actor future exit with error.
+    pub fn take_error(&mut self) -> Option<JoinError> {
+        self.error.take()
     }
 }

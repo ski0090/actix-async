@@ -66,7 +66,7 @@ pub mod address;
 pub mod context;
 pub mod error;
 pub mod prelude {
-    pub use crate::actor::Actor;
+    pub use crate::actor::{Actor, ActorState};
     pub use crate::context::Context;
     pub use crate::context::ContextJoinHandle;
     pub use crate::error::ActixAsyncError;
