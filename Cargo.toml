@@ -1,39 +1,9 @@
-[package]
-name = "actix-async"
-version = "0.1.0"
-authors = ["fakeshadow <24548779@qq.com>"]
-edition = "2018"
+[workspace]
+members = [
+    "actix-async",
+    "actix-async-codegen"
+]
 
-[features]
-default = ["tokio-rt"]
-tokio-rt = ["std", "tokio/rt", "tokio/time"]
-std = []
-
-[[example]]
-name = "concurrency"
-path = "./examples/concurrency.rs"
-
-[[example]]
-name = "closure"
-path = "./examples/closure.rs"
-
-[dependencies]
-cache-padded = "1.1.1"
-futures-core = { version = "0.3", default-features = false }
-pin-project-lite = "0.2.6"
-slab = { version = "0.4.3", default-features = false }
-
-# TODO: make spin optional dep.
-spin = { version = "0.9.0", default-features = false, features = ["use_ticket_mutex"] }
-
-# tokio runtime support
-tokio = { version = "1.7.1", optional = true }
-
-[dev-dependencies]
-actix = { version = "0.12", default-features = false }
-async-std = { version = "1.7.0", features = ["attributes", "unstable"] }
-async-trait = "0.1.42"
-doc-comment = "0.3.3"
-futures-util = { version = "0.3.8", default-features = false, features = ["alloc"] }
-futures-intrusive = { version = "^0.4", default-features = false }
-tokio = { version = "1.7.1", features = ["full"] }
+[patch.crates-io]
+actix-async = { path = "./actix-async" }
+actix-async-codegen = { path = "./actix-async-codegen" }

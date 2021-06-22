@@ -154,7 +154,7 @@ impl<'c, A: Actor> Context<'c, A> {
     /// struct StreamMessage;
     /// message!(StreamMessage, ());
     ///
-    /// #[async_trait::async_trait(?Send)]
+    /// #[actix_async::handler]
     /// impl Handler<StreamMessage> for StreamActor {
     ///     async fn handle(&self, _: StreamMessage, _: Context<'_, Self>) {
     ///     /*
@@ -166,15 +166,12 @@ impl<'c, A: Actor> Context<'c, A> {
     ///     }
     /// }
     ///
-    /// #[tokio::main]
+    /// #[actix_async::main]
     /// async fn main() {
-    ///     tokio::task::LocalSet::new().run_until(async {
-    ///         let address = StreamActor::create(|ctx| {
-    ///             ctx.add_stream(once(async { StreamMessage }));
-    ///             StreamActor
-    ///         });
-    ///     })
-    ///     .await
+    ///     let address = StreamActor::create(|ctx| {
+    ///         ctx.add_stream(once(async { StreamMessage }));
+    ///         StreamActor
+    ///     });
     /// }
     /// ```
     pub fn add_stream<S>(&self, stream: S) -> ContextJoinHandle

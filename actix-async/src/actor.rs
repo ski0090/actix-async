@@ -8,8 +8,6 @@ use super::context_future::{ContextFuture, ContextInner};
 use super::runtime::RuntimeService;
 use super::util::{channel::channel, futures::LocalBoxFuture};
 
-const CHANNEL_CAP: usize = 256;
-
 /// trait for stateful async actor.
 pub trait Actor: Sized + 'static {
     /// actor is async and needs a runtime.
@@ -74,26 +72,23 @@ pub trait Actor: Sized + 'static {
     ///     }
     /// }
     ///
-    /// #[tokio::main]
+    /// #[actix_async::main]
     /// async fn main() {
-    ///     tokio::task::LocalSet::new().run_until(async {
-    ///         let addr = TestActor::create_async(|ctx| {
-    ///             // *. notice context can not move to async block. so you have to use it from
-    ///             // outside if you would.
-    ///             let _ctx = ctx;
-    ///             async {
-    ///                 // run async code
-    ///                 tokio::time::sleep(Duration::from_secs(1)).await;
-    ///                 // return an instance of actor.
-    ///                 TestActor
-    ///             }
-    ///         });
-    ///
-    ///         // run async closure with actor and it's context.
-    ///         let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
-    ///         assert_eq!(996, res.unwrap());
-    ///     })
-    ///     .await
+    ///     let addr = TestActor::create_async(|ctx| {
+    ///         // *. notice context can not move to async block. so you have to use it from
+    ///         // outside if you would.
+    ///         let _ctx = ctx;
+    ///         async {
+    ///             // run async code
+    ///             tokio::time::sleep(Duration::from_secs(1)).await;
+    ///             // return an instance of actor.
+    ///             TestActor
+    ///         }
+    ///     });
+    ///     
+    ///     // run async closure with actor and it's context.
+    ///     let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
+    ///     assert_eq!(996, res.unwrap());
     /// }
     /// ```
     fn create_async<F, Fut>(f: F) -> Addr<Self>
@@ -130,32 +125,29 @@ pub trait Actor: Sized + 'static {
     ///     }
     /// }
     ///
-    /// #[tokio::main]
+    /// #[actix_async::main]
     /// async fn main() {
-    ///     tokio::task::LocalSet::new().run_until(async {
-    ///         let (addr, fut) = TestActor::create_context(|ctx| {
-    ///             // *. notice context can not move to async block. so you have to use it from
-    ///             // outside if you would.
-    ///             let _ctx = ctx;
-    ///             async {
-    ///                 // run async code
-    ///                 tokio::time::sleep(Duration::from_secs(1)).await;
-    ///                 // return an instance of actor.
-    ///                 TestActor
-    ///             }
-    ///         });
-    ///         
-    ///         // await on the fut to get ContextFuture.
-    ///         let ctx_fut = fut.await;
-    ///       
-    ///         // manual spawn ContextFuture to tokio runtime.     
-    ///         tokio::task::spawn_local(ctx_fut);
-    ///
-    ///         // run async closure with actor and it's context.
-    ///         let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
-    ///         assert_eq!(996, res.unwrap());
-    ///     })
-    ///     .await
+    ///     let (addr, fut) = TestActor::create_context(|ctx| {
+    ///         // *. notice context can not move to async block. so you have to use it from
+    ///         // outside if you would.
+    ///         let _ctx = ctx;
+    ///         async {
+    ///             // run async code
+    ///             tokio::time::sleep(Duration::from_secs(1)).await;
+    ///             // return an instance of actor.
+    ///             TestActor
+    ///         }
+    ///     });
+    ///     
+    ///     // await on the fut to get ContextFuture.
+    ///     let ctx_fut = fut.await;
+    ///     
+    ///     // manual spawn ContextFuture to tokio runtime.     
+    ///     tokio::task::spawn_local(ctx_fut);
+    ///     
+    ///     // run async closure with actor and it's context.
+    ///     let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;
+    ///     assert_eq!(996, res.unwrap());
     /// }
     /// ```
     fn create_context<F, Fut>(f: F) -> (Addr<Self>, LocalBoxFuture<'static, ContextFuture<Self>>)
@@ -174,7 +166,7 @@ pub trait Actor: Sized + 'static {
     ///
     /// Default to `256`.
     fn size_hint() -> usize {
-        CHANNEL_CAP
+        256
     }
 }
 

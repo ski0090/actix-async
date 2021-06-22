@@ -37,7 +37,7 @@ use core::{future::Future, time::Duration};
 /// struct TestMessage;
 /// message!(TestMessage, usize);
 ///
-/// #[async_trait::async_trait(?Send)]
+/// #[actix_async::handler]
 /// impl Handler<TestMessage> for AsyncStdActor {
 ///     async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> usize {
 ///         996
@@ -48,7 +48,7 @@ use core::{future::Future, time::Duration};
 /// struct TokioActor;
 /// actor!(TokioActor);
 ///
-/// #[async_trait::async_trait(?Send)]
+/// #[actix_async::handler]
 /// impl Handler<TestMessage> for TokioActor {
 ///     async fn handle(&self, _: TestMessage, _: Context<'_, Self>) -> usize {
 ///         251

@@ -87,7 +87,6 @@ mod impl_actix_async {
     use super::*;
 
     use actix_async::prelude::*;
-    use async_trait::async_trait;
 
     impl Actor for MyActor {
         type Runtime = TokioRuntime;
@@ -101,7 +100,7 @@ mod impl_actix_async {
 
     message!(Msg, ());
 
-    #[async_trait(?Send)]
+    #[actix_async::handler]
     impl Handler<Msg> for MyActor {
         async fn handle(&self, _: Msg, _: Context<'_, Self>) {
             let state = self.state.get() + 1;
