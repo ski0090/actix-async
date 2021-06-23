@@ -7,7 +7,7 @@ edition = "2018"
 [features]
 default = ["macros", "tokio-rt"]
 macros = ["actix-async-codegen", "async-trait"]
-tokio-rt = ["std", "tokio/rt", "tokio/time"]
+tokio-rt = ["std", "tokio/rt", "tokio/sync", "tokio/time"]
 std = []
 
 [[example]]

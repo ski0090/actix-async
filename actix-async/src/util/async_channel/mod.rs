@@ -13,12 +13,6 @@ use core::{
     task::{Context, Poll},
 };
 
-#[cfg(feature = "std")]
-use std::thread::yield_now;
-
-#[cfg(not(feature = "std"))]
-use core::hint::spin_loop as yield_now;
-
 use crate::error::ActixAsyncError;
 use crate::util::{
     futures::{ready, Stream},
@@ -164,7 +158,7 @@ impl<T> Future for SendFuture<'_, T> {
         let msg = this.msg.take().unwrap();
 
         let cap = this.sender.channel.cap;
-        let mut in_queue = this.sender.channel.in_queue.load(Ordering::Acquire);
+        let mut in_queue = this.sender.channel.in_queue.load(Ordering::Relaxed);
 
         loop {
             if in_queue < cap {
@@ -172,7 +166,7 @@ impl<T> Future for SendFuture<'_, T> {
                     in_queue,
                     in_queue + 1,
                     Ordering::SeqCst,
-                    Ordering::Acquire,
+                    Ordering::Relaxed,
                 ) {
                     Ok(cur) => {
                         return match this.sender.do_send(msg) {
@@ -190,10 +184,8 @@ impl<T> Future for SendFuture<'_, T> {
                     }
                     Err(cur) => {
                         in_queue = cur;
-
-                        // another thread increment the counter already. yield thread
-                        // and try again. (This path should be very short)
-                        yield_now();
+                        // another thread increment the counter already.
+                        // (This path should be very short)
                         continue;
                     }
                 }
@@ -238,10 +230,23 @@ impl<T> Clone for WeakSender<T> {
 
 impl<T> WeakSender<T> {
     pub fn upgrade(&self) -> Option<Sender<T>> {
-        WeakRefCounter::upgrade(&self.channel).map(|channel| {
-            channel.sender_count.fetch_add(1, Ordering::Relaxed);
-            Sender { channel }
-        })
+        if let Some(channel) = WeakRefCounter::upgrade(&self.channel) {
+            let mut count = channel.sender_count.load(Ordering::Relaxed);
+
+            while count != 0 {
+                match channel.sender_count.compare_exchange_weak(
+                    count,
+                    count + 1,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return Some(Sender { channel }),
+                    Err(cur) => count = cur,
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -378,5 +383,35 @@ fn full_fence() {
         let _ = a.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
     } else {
         fence(Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn weak_sender() {
+        let (tx, _rx) = channel::<u8>(1);
+
+        let count = |num: usize| assert_eq!(tx.channel.sender_count.load(Ordering::SeqCst), num);
+
+        count(1);
+
+        let weak = tx.downgrade();
+        count(1);
+
+        {
+            let _strong = weak.upgrade().unwrap();
+            count(2);
+        }
+
+        count(1);
+
+        let weak = tx.downgrade();
+        count(1);
+        drop(tx);
+
+        assert!(weak.upgrade().is_none());
     }
 }

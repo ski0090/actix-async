@@ -48,6 +48,7 @@ impl Handler<Msg> for MyActor {
         tokio::task::spawn_blocking(|| println!("spawn_blocking works"))
             .await
             .unwrap();
+
         let spawn = tokio::spawn(async {
             tokio::task::block_in_place(|| println!("block_in_place works"));
             println!("spawn works");
@@ -64,8 +65,6 @@ impl Handler<Msg> for MyActor {
 // start a multi-thread tokio runtime.
 #[tokio::main(worker_threads = 4)]
 async fn main() {
-    tokio::task::block_in_place(|| println!("block_in_place works"));
-
     // construct a supervisor with 2 worker threads.
     let supervisor = Supervisor::builder().workers(2).build();
 

@@ -65,7 +65,7 @@ use core::{future::Future, time::Duration};
 ///     let res = addr.send(TestMessage).await;
 ///     assert_eq!(996, res.unwrap());
 ///
-///     // run actor in tokio runtime
+///     // run actor in tokio runtime in the same process.
 ///     std::thread::spawn(|| {
 ///         let local = tokio::task::LocalSet::new();
 ///         local.spawn_local(async {
