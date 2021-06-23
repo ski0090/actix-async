@@ -2,16 +2,16 @@ use core::ops::Deref;
 
 use alloc::boxed::Box;
 
-use crate::actor::{Actor, ActorState};
-use crate::context::Context;
-use crate::error::ActixAsyncError;
-use crate::handler::Handler;
-use crate::message::{
+use super::actor::{Actor, ActorState};
+use super::context::Context;
+use super::error::ActixAsyncError;
+use super::handler::Handler;
+use super::message::{
     message_send_check, ActorMessage, FunctionMessage, FunctionMutMessage, Message,
 };
-use crate::request::{BoxedMessageRequest, MessageRequest, _MessageRequest};
-use crate::runtime::RuntimeService;
-use crate::util::{
+use super::request::{BoxedMessageRequest, MessageRequest, _MessageRequest};
+use super::runtime::RuntimeService;
+use super::util::{
     channel::{oneshot, OneshotSender, Receiver, Sender, WeakSender},
     futures::LocalBoxFuture,
 };

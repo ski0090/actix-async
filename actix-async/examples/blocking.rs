@@ -67,5 +67,5 @@ async fn main() {
     println!("\r\n\r\nTook {:?} to finish example", now.elapsed());
 
     // explicit stop supervisor is suggested.
-    assert!(supervisor.stop().await)
+    assert!(supervisor.stop(true).await)
 }

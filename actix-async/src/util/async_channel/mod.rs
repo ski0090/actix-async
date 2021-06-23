@@ -392,7 +392,7 @@ mod test {
 
     #[test]
     fn weak_sender() {
-        let (tx, _rx) = channel::<u8>(1);
+        let (tx, rx) = channel::<u8>(1);
 
         let count = |num: usize| assert_eq!(tx.channel.sender_count.load(Ordering::SeqCst), num);
 
@@ -412,6 +412,8 @@ mod test {
         count(1);
         drop(tx);
 
+        assert!(rx.is_closed());
+        assert_eq!(rx.channel.sender_count.load(Ordering::SeqCst), 0);
         assert!(weak.upgrade().is_none());
     }
 }

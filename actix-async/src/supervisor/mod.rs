@@ -1,6 +1,9 @@
+mod error;
 mod worker;
 
 pub use tokio::task::JoinError;
+
+pub(super) use self::error::SupervisorError;
 
 use core::{future::Future, mem, time::Duration};
 
@@ -63,22 +66,33 @@ impl Supervisor {
         SupervisorBuilder::new()
     }
 
-    pub async fn stop(self) -> bool {
+    /// Stop the supervisor and remove all resource it uses.
+    ///
+    /// When is_graceful is set to true the stop process would wait for all actors future
+    /// stop.
+    /// (By [`Addr::stop`](crate::address::Addr::stop) or any other means that render
+    /// an actor future exit.)
+    ///
+    /// The progress of graceful shutdown would last until it reaches shutdown_timeout of
+    /// Supervisor.
+    pub async fn stop(self, is_graceful: bool) -> bool {
         if self.tx.close() {
             let handles = mem::take(&mut *self.join_handles.lock());
 
             if handles.is_empty() {
                 false
             } else {
-                let mut stop_handle =
-                    tokio::task::spawn_blocking(|| handles.into_iter().for_each(|h| h.stop()));
-                let timeout = Box::pin(tokio::time::sleep(self.shutdown_timeout));
-                select! {
-                    _ = &mut stop_handle => true,
-                    _ = timeout => {
-                        stop_handle.abort();
-                        false
+                let stop = Box::pin(async move {
+                    for handle in handles {
+                        let _ = handle.stop(is_graceful).await;
                     }
+                });
+
+                let timeout = Box::pin(tokio::time::sleep(self.shutdown_timeout));
+
+                select! {
+                    _ = stop => true,
+                    _ = timeout => false
                 }
             }
         } else {
@@ -130,9 +144,30 @@ impl Supervisor {
     }
 }
 
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // Check if is the last copy of supervisor.
+        if RefCounter::strong_count(&self.join_handles) == 1 {
+            // close channel in case supervisor is not closed by Supervisor::stop
+            let _ = self.tx.close();
+
+            // if handles are still there just drop them.
+            // Worker would force a recovery of resource on drop.
+            let worker_handles = mem::take(&mut *self.join_handles.lock());
+            drop(worker_handles);
+        }
+    }
+}
+
 pub struct SupervisorBuilder {
     workers: usize,
     shutdown_timeout: Duration,
+}
+
+impl Default for SupervisorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SupervisorBuilder {
@@ -143,11 +178,18 @@ impl SupervisorBuilder {
         }
     }
 
+    /// Change the worker threads a supervisor would spawn.
+    ///
+    /// Default to 4.
     pub fn workers(mut self, workers: usize) -> Self {
         self.workers = workers;
         self
     }
 
+    /// Change the graceful shutdown timeout. Supervisor would be force to stop
+    /// after this period of time.
+    ///
+    /// Default to 30 seconds.
     pub fn shutdown_timeout(mut self, dur: Duration) -> Self {
         self.shutdown_timeout = dur;
         self

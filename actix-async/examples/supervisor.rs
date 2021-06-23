@@ -83,6 +83,8 @@ async fn main() {
 
     assert_eq!(res, 996);
 
+    addr.stop(true).await.unwrap();
+
     // explicit stop supervisor is suggested.
-    assert!(supervisor.stop().await)
+    assert!(supervisor.stop(true).await)
 }

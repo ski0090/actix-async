@@ -2,7 +2,7 @@ use core::{ops::Deref, task::Waker};
 
 use alloc::{collections::VecDeque, task::Wake};
 
-use crate::util::smart_pointer::{Lock, RefCounter};
+use super::util::smart_pointer::{Lock, RefCounter};
 
 pub(crate) struct ActorWaker {
     queue: WakeQueue,
