@@ -43,28 +43,31 @@ async fn main() {
     // construct a supervisor with 2 worker threads.
     let supervisor = Supervisor::builder().workers(2).build();
 
-    // start 2 instance of BlockingActor in supervisor.
-    let addr = supervisor.start(2, |_| async { BlockingActor }).await;
+    // This is a scope to drop Addr<BlockingActor> early before calling Supervisor::stop.
+    {
+        // start 2 instance of BlockingActor in supervisor.
+        let addr = supervisor.start(2, |_| async { BlockingActor }).await;
 
-    // send 200 messages concurrently.
-    let mut fut = FuturesUnordered::new();
-    for _ in 0..200 {
-        fut.push(addr.wait(Msg));
+        // send 200 messages concurrently.
+        let mut fut = FuturesUnordered::new();
+        for _ in 0..200 {
+            fut.push(addr.wait(Msg));
+        }
+
+        let now = Instant::now();
+        while fut.next().await.is_some() {}
+
+        // since we have 2 workers for 1 ms blocking job. the total time taken should be slightly above
+        // 100 ms.
+        //
+        // *. There is a chance two actors end up on the same thread so the work would take
+        // more than 200 ms to finish.
+        // This is due to work stealing nature of the supervisor.
+        //
+        // It's working as intended as the work stealing can detect work load difference between
+        // supervisor workers and adjust the distribution of actors.
+        println!("\r\n\r\nTook {:?} to finish example", now.elapsed());
     }
-
-    let now = Instant::now();
-    while fut.next().await.is_some() {}
-
-    // since we have 2 workers for 1 ms blocking job. the total time taken should be slightly above
-    // 100 ms.
-    //
-    // *. There is a chance two actors end up on the same thread so the work would take
-    // more than 200 ms to finish.
-    // This is due to work stealing nature of the supervisor.
-    //
-    // It's working as intended as the work stealing can detect work load difference between
-    // supervisor workers and adjust the distribution of actors.
-    println!("\r\n\r\nTook {:?} to finish example", now.elapsed());
 
     // explicit stop supervisor is suggested.
     assert!(supervisor.stop(true).await)

@@ -345,10 +345,8 @@ impl<A: Actor> ContextFuture<A> {
                 }
                 // channel is closed
                 Poll::Ready(None) => {
-                    match this.ctx.state.replace(ActorState::StopGraceful) {
-                        ActorState::StopGraceful | ActorState::Running
-                            if this.extra_poll || this.have_task() =>
-                        {
+                    match this.ctx.state.get() {
+                        ActorState::StopGraceful if this.extra_poll || this.have_task() => {
                             // have new concurrent message.
                             // or wait for unfinished messages to resolve.
                             // In these cases break loop enter pending state.
@@ -358,7 +356,7 @@ impl<A: Actor> ContextFuture<A> {
                             this.state = ContextState::Stopping;
                             return self.poll_close(cx);
                         }
-                    };
+                    }
                 }
                 Poll::Pending => break,
             }

@@ -11,6 +11,7 @@ use super::util::{channel::OneshotSender, futures::LocalBoxFuture};
 /// # example:
 /// ```rust:
 /// use actix_async::prelude::*;
+/// use actix_async::handler;
 ///
 /// struct TestActor;
 /// actor!(TestActor);
@@ -21,8 +22,8 @@ use super::util::{channel::OneshotSender, futures::LocalBoxFuture};
 /// struct TestMessage2;
 /// message!(TestMessage2, ());
 ///
-/// // use async method directly with the help of async_trait crate.
-/// #[async_trait::async_trait(?Send)]
+/// // use async method directly with the help of handler macro.
+/// #[handler]
 /// impl Handler<TestMessage> for TestActor {
 ///    async fn handle(&self, _: TestMessage,ctx: Context<'_, Self>) {
 ///         let _this = self;
@@ -31,7 +32,7 @@ use super::util::{channel::OneshotSender, futures::LocalBoxFuture};
 ///     }
 /// }
 ///
-/// // impl boxed future manually without async_trait.
+/// // impl boxed future manually without handler macro.
 /// impl Handler<TestMessage2> for TestActor {
 ///     fn handle<'a: 'r,'c: 'r, 'r>(&'a self, _: TestMessage2, ctx: Context<'c, Self>) -> LocalBoxFuture<'r, ()> {
 ///         Box::pin(async move {
