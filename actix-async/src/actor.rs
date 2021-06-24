@@ -46,9 +46,12 @@ pub trait Actor: Sized + 'static {
     ///
     /// Return `ActorState::Running` to re-construct the actor future and keep it running.
     /// Return everything else to stop the supervised actor future.
-    fn supervised(state: super::supervisor::SupervisedState) -> ActorState {
-        let _ = state;
-        ActorState::Stop
+    fn supervised(mut state: super::supervisor::SupervisedState) -> ActorState {
+        // take error from state and restart actor instance if it's a panic.
+        match state.take_error() {
+            Some(e) if e.is_panic() => ActorState::Running,
+            _ => ActorState::Stop,
+        }
     }
 
     /// start the actor on current thread and return it's address

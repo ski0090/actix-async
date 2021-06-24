@@ -1,5 +1,5 @@
 use actix_async::prelude::*;
-use actix_async::supervisor::{SupervisedState, Supervisor};
+use actix_async::supervisor::Supervisor;
 use futures_util::FutureExt;
 use std::panic;
 
@@ -8,26 +8,7 @@ use std::panic;
 */
 
 struct MyActor;
-
-impl Actor for MyActor {
-    type Runtime = TokioRuntime;
-
-    // supervised method is called after an actor future is ended.
-    // return ActorState for supervisor to determine if the actor should be restarted.
-    fn supervised(mut state: SupervisedState) -> ActorState {
-        // take error from state and restart actor instance if it's a panic.
-        match state.take_error() {
-            Some(e) if e.is_panic() => {
-                println!(
-                    "actor panic with error: {:?}",
-                    e.into_panic().downcast::<&str>().unwrap()
-                );
-                ActorState::Running
-            }
-            _ => ActorState::Stop,
-        }
-    }
-}
+actor!(MyActor);
 
 impl MyActor {
     async fn panic(&self) {

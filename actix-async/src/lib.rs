@@ -138,6 +138,7 @@ mod test {
 
     use crate as actix_async;
     use actix_async::prelude::*;
+    use actix_async::supervisor::Supervisor;
 
     #[actix_async::test]
     async fn stop_graceful() {
@@ -323,18 +324,19 @@ mod test {
         assert!(now.elapsed() > Duration::from_secs(3));
     }
 
-    //
-    // #[tokio::test]
-    // async fn test_panic_recovery() {
-    //     let supervisor = Supervisor::new(1);
-    //     let addr = supervisor.start_in_arbiter(1, |_| TestActor::default());
-    //
-    //     let _ = addr.send(TestPanicMsg).await;
-    //     sleep(Duration::from_millis(1000)).await;
-    //     let res = addr.send(TestMessage).await;
-    //
-    //     assert_eq!(996, res.unwrap());
-    // }
+    #[actix_async::test]
+    async fn test_panic_recovery() {
+        let supervisor = Supervisor::builder().workers(1).build();
+        let addr = supervisor
+            .start(1, |_| async { TestActor::default() })
+            .await;
+
+        let _ = addr.send(TestPanicMsg).await;
+        sleep(Duration::from_millis(1000)).await;
+        let res = addr.send(TestMsg).await;
+
+        assert_eq!(996, res.unwrap());
+    }
 
     struct TestActor(usize);
 
