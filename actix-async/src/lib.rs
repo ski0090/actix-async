@@ -124,7 +124,7 @@ doc_comment::doctest!("../../README.md");
 #[cfg(test)]
 mod test {
     use core::{
-        cell::Cell,
+        cell::{Cell, RefCell},
         pin::Pin,
         sync::atomic::{AtomicUsize, Ordering},
         task::{Context as StdContext, Poll},
@@ -178,7 +178,7 @@ mod test {
     }
 
     #[actix_async::test]
-    async fn test_timeout() {
+    async fn timeout() {
         let addr = TestActor::default().start();
 
         let res = addr
@@ -191,7 +191,7 @@ mod test {
     }
 
     #[actix_async::test]
-    async fn test_recipient() {
+    async fn recipient() {
         let addr = TestActor::default().start();
 
         let re = addr.recipient::<TestMsg>();
@@ -220,7 +220,7 @@ mod test {
     }
 
     #[actix_async::test]
-    async fn test_delay() {
+    async fn delay() {
         let addr = TestActor::default().start();
 
         let res = addr.send(TestDelayMessage).await.unwrap();
@@ -245,7 +245,7 @@ mod test {
     }
 
     #[actix_async::test]
-    async fn test_stream() {
+    async fn stream() {
         let addr = TestActor::default().start();
 
         struct TestStream {
@@ -293,7 +293,7 @@ mod test {
     }
 
     #[actix_async::test]
-    async fn test_capacity() {
+    async fn capacity() {
         let state = Rc::new(Cell::new(0));
 
         let addr = TestCapActor(state.clone()).start();
@@ -325,7 +325,7 @@ mod test {
     }
 
     #[actix_async::test]
-    async fn test_panic_recovery() {
+    async fn panic_recovery() {
         let supervisor = Supervisor::builder().workers(1).build();
         let addr = supervisor
             .start(1, |_| async { TestActor::default() })
@@ -336,6 +336,44 @@ mod test {
         let res = addr.send(TestMsg).await;
 
         assert_eq!(996, res.unwrap());
+    }
+
+    // This is to test if re allocation of actor state would break other concurrent tasks.
+    #[actix_async::test]
+    async fn actor_move() {
+        struct TestAct(RefCell<Vec<u8>>);
+        actor!(TestAct);
+
+        let mut v = Vec::with_capacity(3);
+        for i in 1..4 {
+            v.push(i);
+        }
+
+        let addr = TestAct(RefCell::new(v)).start();
+
+        let addr_clone = addr.clone();
+        tokio::task::spawn_local(async move {
+            addr_clone
+                .run(|act, _| {
+                    Box::pin(async move {
+                        let this = act;
+                        tokio::task::yield_now().await;
+                        assert_eq!(*this.0.borrow().get(3).unwrap(), 4);
+                    })
+                })
+                .await
+                .unwrap();
+        });
+
+        addr.run(|act, _| {
+            Box::pin(async move {
+                let this = act;
+                tokio::task::yield_now().await;
+                this.0.borrow_mut().push(4);
+            })
+        })
+        .await
+        .unwrap();
     }
 
     struct TestActor(usize);

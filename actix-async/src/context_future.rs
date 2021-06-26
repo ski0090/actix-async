@@ -1,7 +1,6 @@
 use core::{
     cell::{Cell, RefCell},
     future::Future,
-    marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
     pin::Pin,
@@ -23,9 +22,9 @@ use super::waker::{ActorWaker, WakeQueue};
 
 type Task = LocalBoxFuture<'static, ()>;
 
-pub(crate) struct TaskRef<A>(Slab<Task>, PhantomData<A>);
+pub(crate) struct TaskRef(Slab<Task>);
 
-impl<A> Deref for TaskRef<A> {
+impl Deref for TaskRef {
     type Target = Slab<Task>;
 
     fn deref(&self) -> &Self::Target {
@@ -33,15 +32,15 @@ impl<A> Deref for TaskRef<A> {
     }
 }
 
-impl<A> DerefMut for TaskRef<A> {
+impl DerefMut for TaskRef {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<A: Actor> TaskRef<A> {
+impl TaskRef {
     fn new() -> Self {
-        Self(Slab::new(), PhantomData)
+        Self(Slab::new())
     }
 
     #[inline(always)]
@@ -88,7 +87,7 @@ pub struct ContextFuture<A: Actor> {
     ctx: ContextInner<A>,
     queue: WakeQueue,
     task_mut: TaskMut,
-    task_ref: TaskRef<A>,
+    task_ref: TaskRef,
     drop_notify: Option<OneshotSender<()>>,
     state: ContextState,
     extra_poll: bool,
