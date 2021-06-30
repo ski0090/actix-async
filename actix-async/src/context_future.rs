@@ -43,7 +43,7 @@ impl TaskRef {
         Self(Slab::new())
     }
 
-    #[inline(always)]
+    #[inline]
     fn add_task(&mut self, task: Task) -> usize {
         self.insert(task)
     }
@@ -66,17 +66,17 @@ impl DerefMut for TaskMut {
 }
 
 impl TaskMut {
-    #[inline(always)]
+    #[inline]
     fn new() -> Self {
         Self(None)
     }
 
-    #[inline(always)]
+    #[inline]
     pub(crate) fn clear(&mut self) {
         self.0 = None;
     }
 
-    #[inline(always)]
+    #[inline]
     fn add_task(&mut self, task: Task) {
         self.0 = Some(task);
     }
@@ -110,7 +110,7 @@ impl<A: Actor> ContextInner<A> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub(crate) fn as_ref(&self) -> Context<'_, A> {
         Context::new(self)
     }
@@ -152,7 +152,6 @@ impl<A: Actor> ContextFuture<A> {
         }
     }
 
-    #[inline(always)]
     fn add_task_mut(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
         // Set extra_poll to false and there MUST be an instant extra poll
         // after adding a TaskMut.
@@ -163,7 +162,6 @@ impl<A: Actor> ContextFuture<A> {
         self.task_mut.add_task(task);
     }
 
-    #[inline(always)]
     fn add_task_ref(&mut self, mut msg: Box<dyn MessageHandler<A>>) {
         // when adding new concurrent message we always want an extra poll to register them.
         self.extra_poll = true;
@@ -173,12 +171,12 @@ impl<A: Actor> ContextFuture<A> {
         self.queue.enqueue(idx);
     }
 
-    #[inline(always)]
+    #[inline]
     fn have_task(&self) -> bool {
         !self.task_ref.is_empty() || self.task_mut.is_some()
     }
 
-    #[inline(always)]
+    #[inline]
     fn can_add_task(&self) -> bool {
         let len = self.task_ref.len();
         if self.task_mut.is_some() {
@@ -200,7 +198,7 @@ impl<A: Actor> ContextFuture<A> {
         Poll::Pending
     }
 
-    #[inline(always)]
+    #[inline]
     fn poll_running(mut self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<()> {
         let this = self.as_mut().get_mut();
 

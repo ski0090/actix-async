@@ -46,7 +46,7 @@ impl ContextJoinHandle {
 }
 
 impl<'c, A: Actor> Context<'c, A> {
-    #[inline(always)]
+    #[inline]
     pub(crate) fn new(inner: &'c ContextInner<A>) -> Self {
         Context { inner }
     }
@@ -131,6 +131,7 @@ impl<'c, A: Actor> Context<'c, A> {
     }
 
     /// get the address of actor from context.
+    #[inline]
     pub fn address(&self) -> Option<Addr<A>> {
         Addr::from_recv(&self.inner.rx).ok()
     }

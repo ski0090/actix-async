@@ -11,7 +11,7 @@ pub(crate) struct ActorWaker {
 }
 
 impl ActorWaker {
-    #[inline(always)]
+    #[inline]
     pub(crate) fn new(queued: &WakeQueue, idx: usize, waker: &Waker) -> RefCounter<Self> {
         RefCounter::new(Self {
             queue: WakeQueue::clone(queued),
@@ -65,7 +65,7 @@ impl WakeQueue {
         Self(RefCounter::new(Lock::new(VecDeque::new())))
     }
 
-    #[inline(always)]
+    #[inline]
     pub(crate) fn enqueue(&self, idx: usize) {
         self.lock().push_back(idx);
     }
