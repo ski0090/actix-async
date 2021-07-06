@@ -6,6 +6,7 @@ use core::{
 };
 
 use alloc::{boxed::Box, vec::Vec};
+use pin_project_lite::pin_project;
 use slab::Slab;
 
 use super::actor::{Actor, ActorState};
@@ -62,8 +63,6 @@ impl<A: Actor> ContextFuture<A> {
         }
     }
 }
-
-use tokio::select;
 
 async fn poll_stream<A: Actor>(stream_cache: &RefCell<Vec<StreamMessage<A>>>) -> ActorMessage<A> {
     poll_fn(|cx| {
@@ -236,45 +235,52 @@ impl<A: Actor> ContextFuture<A> {
                             _ => {}
                         }
 
-                        select! {
-                            biased;
-                            msg = poll_fn(|cx| Pin::new(&mut *ctx.rx.borrow_mut()).poll_next(cx)), if task_mut.is_empty() && task_ref.len() < A::size_hint() => {
-                                match msg {
-                                    Some(ActorMessage::Ref(mut msg)) => {
-                                        let task = msg.handle(act, ctx.as_ref());
-                                        task_ref.add_task(task);
-                                    },
-                                    Some(ActorMessage::Mut(msg)) => task_mut.add_task(msg),
-                                    Some(ActorMessage::State(state, tx)) => {
-                                        ctx.state.set(state);
-                                        notify = Some(tx);
-                                    }
-                                    None => ctx.state.set(ActorState::Stop),
-                                };
-                            },
-                            // see comment in poll_ref function.
-                            // when a hard break happen yield to executor.
-                            _ = task_ref.poll_task(), if !task_ref.is_empty() => yield_now().await,
-                            msg = poll_stream(&ctx.stream_cache), if task_mut.is_empty() => {
-                                match msg {
-                                    ActorMessage::Ref(mut msg) => {
-                                        let task = msg.handle(act, ctx.as_ref());
-                                        task_ref.add_task(task);
-                                    },
-                                    ActorMessage::Mut(msg) => task_mut.add_task(msg),
-                                    _ => unreachable!()
+                        let fut1 = if task_mut.is_empty() && task_ref.len() < A::size_hint() {
+                            Some(poll_fn(|cx| {
+                                Pin::new(&mut *ctx.rx.borrow_mut()).poll_next(cx)
+                            }))
+                        } else {
+                            None
+                        };
+
+                        let fut2 = if !task_ref.is_empty() {
+                            Some(task_ref.poll_task())
+                        } else {
+                            None
+                        };
+
+                        let (fut3, fut4) = if task_mut.is_empty() {
+                            (
+                                Some(poll_stream(&ctx.stream_cache)),
+                                Some(poll_future(&ctx.future_cache)),
+                            )
+                        } else {
+                            (None, None)
+                        };
+
+                        let select = ConditionSelect4 {
+                            fut1,
+                            fut2,
+                            fut3,
+                            fut4,
+                        };
+
+                        match select.await {
+                            ConditionSelect4Output::B(_) => yield_now().await,
+                            ConditionSelect4Output::A(Some(msg))
+                            | ConditionSelect4Output::C(msg)
+                            | ConditionSelect4Output::D(msg) => match msg {
+                                ActorMessage::Ref(mut msg) => {
+                                    let task = msg.handle(act, ctx.as_ref());
+                                    task_ref.add_task(task);
+                                }
+                                ActorMessage::Mut(msg) => task_mut.add_task(msg),
+                                ActorMessage::State(state, tx) => {
+                                    ctx.state.set(state);
+                                    notify = Some(tx);
                                 }
                             },
-                            msg = poll_future(&ctx.future_cache), if task_mut.is_empty() => {
-                                match msg {
-                                    ActorMessage::Ref(mut msg) => {
-                                        let task = msg.handle(act, ctx.as_ref());
-                                        task_ref.add_task(task);
-                                    },
-                                    ActorMessage::Mut(msg) => task_mut.add_task(msg),
-                                    _ => unreachable!()
-                                }
-                            },
+                            ConditionSelect4Output::A(None) => ctx.state.set(ActorState::Stop),
                         }
                     }
                 }
@@ -293,4 +299,64 @@ impl<A: Actor> ContextFuture<A> {
             let _ = notify.send(());
         }
     }
+}
+
+pin_project! {
+    struct ConditionSelect4<Fut1, Fut2, Fut3, Fut4> {
+        #[pin]
+        fut1: Option<Fut1>,
+        #[pin]
+        fut2: Option<Fut2>,
+        #[pin]
+        fut3: Option<Fut3>,
+        #[pin]
+        fut4: Option<Fut4>,
+    }
+}
+
+impl<Fut1, Fut2, Fut3, Fut4> Future for ConditionSelect4<Fut1, Fut2, Fut3, Fut4>
+where
+    Fut1: Future,
+    Fut2: Future,
+    Fut3: Future,
+    Fut4: Future,
+{
+    type Output = ConditionSelect4Output<Fut1::Output, Fut2::Output, Fut3::Output, Fut4::Output>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut StdContext<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
+        if let Some(fut) = this.fut1.as_pin_mut() {
+            if let Poll::Ready(a) = fut.poll(cx) {
+                return Poll::Ready(ConditionSelect4Output::A(a));
+            }
+        }
+
+        if let Some(fut) = this.fut2.as_pin_mut() {
+            if let Poll::Ready(b) = fut.poll(cx) {
+                return Poll::Ready(ConditionSelect4Output::B(b));
+            }
+        }
+
+        if let Some(fut) = this.fut3.as_pin_mut() {
+            if let Poll::Ready(c) = fut.poll(cx) {
+                return Poll::Ready(ConditionSelect4Output::C(c));
+            }
+        }
+
+        if let Some(fut) = this.fut4.as_pin_mut() {
+            if let Poll::Ready(d) = fut.poll(cx) {
+                return Poll::Ready(ConditionSelect4Output::D(d));
+            }
+        }
+
+        Poll::Pending
+    }
+}
+
+enum ConditionSelect4Output<A, B, C, D> {
+    A(A),
+    B(B),
+    C(C),
+    D(D),
 }
