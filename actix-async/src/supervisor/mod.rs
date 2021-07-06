@@ -124,7 +124,7 @@ impl Supervisor {
                         let handle = tokio::task::spawn_local(async move {
                             let ctx = ContextInner::new(rx_clone);
                             let fut = ContextFuture::start(func, ctx).await;
-                            fut.await
+                            fut.run().await
                         });
 
                         let res = handle.await;

@@ -126,14 +126,14 @@ impl<'c, A: Actor> Context<'c, A> {
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
     pub fn stop(&self) {
-        self.inner.rx.close();
+        self.inner.rx.borrow().close();
         self.inner.state.set(ActorState::StopGraceful);
     }
 
     /// get the address of actor from context.
     #[inline]
     pub fn address(&self) -> Option<Addr<A>> {
-        Addr::from_recv(&self.inner.rx).ok()
+        Addr::from_recv(&*self.inner.rx.borrow()).ok()
     }
 
     /// add a stream to context. multiple stream can be added to one context.

@@ -113,7 +113,7 @@ pub trait Actor: Sized + 'static {
 
         <Self::Runtime as RuntimeService>::spawn(async move {
             let ctx_fut = fut.await;
-            ctx_fut.await;
+            ctx_fut.run().await;
         });
 
         tx
@@ -156,7 +156,9 @@ pub trait Actor: Sized + 'static {
     ///     let ctx_fut = fut.await;
     ///     
     ///     // manual spawn ContextFuture to tokio runtime.     
-    ///     tokio::task::spawn_local(ctx_fut);
+    ///     tokio::task::spawn_local(async move {
+    ///         ctx_fut.run().await;
+    ///     });
     ///     
     ///     // run async closure with actor and it's context.
     ///     let res = addr.run_wait(|act, ctx| act.test().boxed_local()).await;

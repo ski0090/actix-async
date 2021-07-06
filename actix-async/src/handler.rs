@@ -1,11 +1,9 @@
-use core::{future::Future, mem};
-
 use alloc::boxed::Box;
 
 use super::actor::Actor;
 use super::context::Context;
 use super::message::{FunctionMessage, FunctionMutMessage, Message, MessageContainer};
-use super::util::{channel::OneshotSender, futures::LocalBoxFuture};
+use super::util::futures::LocalBoxFuture;
 
 /// Trait define how actor handle a message.
 /// # example:
@@ -126,17 +124,24 @@ where
 }
 
 pub trait MessageHandler<A: Actor> {
-    fn handle<'msg, 'act, 'ctx>(
-        &'msg mut self,
+    fn handle<'act, 'ctx, 'res>(
+        &mut self,
         act: &'act A,
         ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'static, ()>;
+    ) -> LocalBoxFuture<'res, ()>
+    where
+        'act: 'res,
+        'ctx: 'res;
 
-    fn handle_wait<'msg, 'act, 'ctx>(
-        &'msg mut self,
+    fn handle_wait<'act, 'ctx, 'res>(
+        &mut self,
         act: &'act mut A,
         ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'static, ()> {
+    ) -> LocalBoxFuture<'res, ()>
+    where
+        'act: 'res,
+        'ctx: 'res,
+    {
         self.handle(act, ctx)
     }
 }
@@ -146,73 +151,59 @@ where
     A: Actor + Handler<M>,
     M: Message,
 {
-    fn handle<'msg, 'act, 'ctx>(
-        &'msg mut self,
+    fn handle<'act, 'ctx, 'res>(
+        &mut self,
         act: &'act A,
         ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'static, ()> {
+    ) -> LocalBoxFuture<'res, ()>
+    where
+        'act: 'res,
+        'ctx: 'res,
+    {
         let (msg, tx) = self.take();
-
-        /*
-            SAFETY:
-            `MessageHandler::handle`can not tie to actor and context's lifetime.
-            The reason is it would assume the boxed futures would live as long as the
-            actor and context. Making it impossible to mutably borrow them again from
-            this point forward.
-
-            future transmute to static lifetime must be polled before next
-            ContextWithActor.cache_mut is polled.
-        */
-        let act = unsafe { mem::transmute::<_, &'static A>(act) };
-        let ctx = unsafe { mem::transmute::<_, Context<'static, A>>(ctx) };
 
         let fut = act.handle(msg, ctx);
 
-        handle(tx, fut)
+        Box::pin(async move {
+            match tx {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = fut.await;
+                        let _ = tx.send(res);
+                    }
+                }
+                None => {
+                    let _ = fut.await;
+                }
+            }
+        })
     }
 
-    fn handle_wait<'msg, 'act, 'ctx>(
-        &'msg mut self,
+    fn handle_wait<'act, 'ctx, 'res>(
+        &mut self,
         act: &'act mut A,
         ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'static, ()> {
+    ) -> LocalBoxFuture<'res, ()>
+    where
+        'act: 'res,
+        'ctx: 'res,
+    {
         let (msg, tx) = self.take();
-
-        /*
-            SAFETY:
-            `MessageHandler::handle_wait`can not tie to actor and context's lifetime.
-            The reason is it would assume the boxed futures would live as long as the
-            actor and context. Making it impossible to mutably borrow them again from
-            this point forward.
-
-            future transmute to static lifetime must be polled only when
-            ContextWithActor.cache_ref is empty.
-        */
-        let act = unsafe { mem::transmute::<_, &'static mut A>(act) };
-        let ctx = unsafe { mem::transmute::<_, Context<'static, A>>(ctx) };
 
         let fut = act.handle_wait(msg, ctx);
 
-        handle(tx, fut)
-    }
-}
-
-#[inline]
-fn handle<F>(tx: Option<OneshotSender<F::Output>>, fut: F) -> LocalBoxFuture<'static, ()>
-where
-    F: Future + 'static,
-{
-    Box::pin(async move {
-        match tx {
-            Some(tx) => {
-                if !tx.is_closed() {
-                    let res = fut.await;
-                    let _ = tx.send(res);
+        Box::pin(async move {
+            match tx {
+                Some(tx) => {
+                    if !tx.is_closed() {
+                        let res = fut.await;
+                        let _ = tx.send(res);
+                    }
+                }
+                None => {
+                    let _ = fut.await;
                 }
             }
-            None => {
-                let _ = fut.await;
-            }
-        }
-    })
+        })
+    }
 }
