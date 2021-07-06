@@ -195,9 +195,9 @@ where
 
     let tx = Addr::new(tx);
 
-    let ctx = ContextInner::new();
+    let ctx = ContextInner::new(rx);
 
-    (tx, ContextFuture::start(f, ctx, rx))
+    (tx, ContextFuture::start(f, ctx))
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]

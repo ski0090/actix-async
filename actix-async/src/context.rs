@@ -15,8 +15,6 @@ use super::util::{
     channel::{oneshot, OneshotReceiver, OneshotSender},
     futures::{LocalBoxFuture, Stream},
 };
-use crate::util::channel::Receiver;
-use std::cell::RefCell;
 
 /// Context type of `Actor`. Can be accessed within `Handler::handle` and
 /// `Handler::handle_wait` method.
@@ -24,7 +22,6 @@ use std::cell::RefCell;
 /// Used to mutate the state of actor and add additional tasks to actor.
 pub struct Context<'a, A: Actor> {
     inner: &'a ContextInner<A>,
-    rx: &'a RefCell<Receiver<ActorMessage<A>>>,
 }
 
 /// a join handle can be used to cancel a spawned async task like interval closure and stream
@@ -50,11 +47,8 @@ impl ContextJoinHandle {
 
 impl<'c, A: Actor> Context<'c, A> {
     #[inline]
-    pub(crate) fn new(
-        inner: &'c ContextInner<A>,
-        rx: &'c RefCell<Receiver<ActorMessage<A>>>,
-    ) -> Self {
-        Context { inner, rx }
+    pub(crate) fn new(inner: &'c ContextInner<A>) -> Self {
+        Context { inner }
     }
 
     /// run interval concurrent closure on context. `Handler::handle` will be called.
@@ -132,14 +126,14 @@ impl<'c, A: Actor> Context<'c, A> {
     /// stop the context. It would end the actor gracefully by close the channel draining all
     /// remaining messages.
     pub fn stop(&self) {
-        self.rx.borrow().close();
+        self.inner.rx.borrow().close();
         self.inner.state.set(ActorState::StopGraceful);
     }
 
     /// get the address of actor from context.
     #[inline]
     pub fn address(&self) -> Option<Addr<A>> {
-        Addr::from_recv(&*self.rx.borrow()).ok()
+        Addr::from_recv(&*self.inner.rx.borrow()).ok()
     }
 
     /// add a stream to context. multiple stream can be added to one context.
