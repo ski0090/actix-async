@@ -53,7 +53,7 @@ impl<T> Channel<T> {
     }
 }
 
-pub fn channel<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
+pub(crate) fn channel<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     assert!(cap > 0, "capacity cannot be zero");
 
     let channel = RefCounter::new(Channel {
@@ -81,14 +81,14 @@ pub struct Sender<T> {
 }
 
 impl<T> Sender<T> {
-    pub fn do_send(&self, msg: T) -> Result<(), T> {
+    pub(crate) fn do_send(&self, msg: T) -> Result<(), T> {
         self.channel.queue.push(msg).map(|()| {
             // Notify all blocked streams.
             self.channel.stream_ops.notify(usize::MAX);
         })
     }
 
-    pub fn send(&self, msg: T) -> SendFuture<'_, T> {
+    pub(crate) fn send(&self, msg: T) -> SendFuture<'_, T> {
         SendFuture {
             sender: self,
             listener: None,
@@ -96,11 +96,11 @@ impl<T> Sender<T> {
         }
     }
 
-    pub fn close(&self) -> bool {
+    pub(crate) fn close(&self) -> bool {
         self.channel.close()
     }
 
-    pub fn downgrade(&self) -> WeakSender<T> {
+    pub(crate) fn downgrade(&self) -> WeakSender<T> {
         WeakSender {
             channel: RefCounter::downgrade(&self.channel),
         }
@@ -216,7 +216,7 @@ impl<T> Future for SendFuture<'_, T> {
     }
 }
 
-pub struct WeakSender<T> {
+pub(crate) struct WeakSender<T> {
     channel: WeakRefCounter<Channel<T>>,
 }
 
@@ -250,13 +250,13 @@ impl<T> WeakSender<T> {
     }
 }
 
-pub struct Receiver<T> {
+pub(crate) struct Receiver<T> {
     channel: RefCounter<Channel<T>>,
     listener: Option<EventListener>,
 }
 
 impl<T> Receiver<T> {
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+    pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
         self.channel.queue.pop().map(|msg| {
             if self.channel.dequeue() {
                 // Notify a single blocked send operation. If the notified operation then sends a
@@ -268,7 +268,7 @@ impl<T> Receiver<T> {
         })
     }
 
-    pub fn as_sender(&self) -> Option<Sender<T>> {
+    pub(crate) fn as_sender(&self) -> Option<Sender<T>> {
         if self.channel.queue.is_closed() {
             None
         } else {
@@ -276,11 +276,11 @@ impl<T> Receiver<T> {
         }
     }
 
-    pub fn close(&self) -> bool {
+    pub(crate) fn close(&self) -> bool {
         self.channel.close()
     }
 
-    pub fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         self.channel.queue.is_closed()
     }
 }
@@ -359,7 +359,7 @@ impl<T> Clone for Receiver<T> {
     }
 }
 
-pub enum TryRecvError {
+pub(crate) enum TryRecvError {
     Empty,
     Closed,
 }
