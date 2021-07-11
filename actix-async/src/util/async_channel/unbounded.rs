@@ -123,7 +123,7 @@ struct Position<T> {
 }
 
 /// An unbounded queue.
-pub struct Unbounded<T> {
+pub(super) struct Unbounded<T> {
     /// The head of the queue.
     head: CachePadded<Position<T>>,
 
@@ -133,7 +133,7 @@ pub struct Unbounded<T> {
 
 impl<T> Unbounded<T> {
     /// Creates a new unbounded queue.
-    pub fn new() -> Unbounded<T> {
+    pub(super) fn new() -> Unbounded<T> {
         Unbounded {
             head: CachePadded::new(Position {
                 block: AtomicPtr::new(ptr::null_mut()),
@@ -147,7 +147,7 @@ impl<T> Unbounded<T> {
     }
 
     /// Pushes an item into the queue.
-    pub fn push(&self, value: T) -> Result<(), T> {
+    pub(super) fn push(&self, value: T) -> Result<(), T> {
         let mut tail = self.tail.index.load(Ordering::Acquire);
         let mut block = self.tail.block.load(Ordering::Acquire);
         let mut next_block = None;
@@ -230,7 +230,7 @@ impl<T> Unbounded<T> {
     }
 
     /// Pops an item from the queue.
-    pub fn pop(&self) -> Result<T, TryRecvError> {
+    pub(super) fn pop(&self) -> Result<T, TryRecvError> {
         let mut head = self.head.index.load(Ordering::Acquire);
         let mut block = self.head.block.load(Ordering::Acquire);
 
@@ -324,13 +324,13 @@ impl<T> Unbounded<T> {
     /// Closes the queue.
     ///
     /// Returns `true` if this call closed the queue.
-    pub fn close(&self) -> bool {
+    pub(super) fn close(&self) -> bool {
         let tail = self.tail.index.fetch_or(MARK_BIT, Ordering::SeqCst);
         tail & MARK_BIT == 0
     }
 
     /// Returns `true` if the queue is closed.
-    pub fn is_closed(&self) -> bool {
+    pub(super) fn is_closed(&self) -> bool {
         self.tail.index.load(Ordering::SeqCst) & MARK_BIT != 0
     }
 }

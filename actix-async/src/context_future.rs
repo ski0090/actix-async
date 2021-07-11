@@ -163,7 +163,11 @@ impl<'a> TaskRef<'a> {
                 }
             }
 
-            Poll::Pending
+            if task_ref.is_empty() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
         })
         .await
     }

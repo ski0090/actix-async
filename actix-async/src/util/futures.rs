@@ -12,7 +12,6 @@ use core::{
     task::{Context, Poll},
 };
 
-#[inline]
 pub(crate) fn poll_fn<T, F>(f: F) -> PollFn<F>
 where
     F: FnMut(&mut Context<'_>) -> Poll<T>,

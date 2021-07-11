@@ -55,11 +55,13 @@ pub trait Actor: Sized + 'static {
     }
 
     /// start the actor on current thread and return it's address
+    #[inline]
     fn start(self) -> Addr<Self> {
         Self::create(|_| self)
     }
 
     /// create actor with closure
+    #[inline]
     fn create<F>(f: F) -> Addr<Self>
     where
         F: for<'c> FnOnce(Context<'c, Self>) -> Self + 'static,
@@ -180,6 +182,7 @@ pub trait Actor: Sized + 'static {
     /// Limit the max count of in flight messages and concurrent async tasks.
     ///
     /// Default to `256`.
+    #[inline]
     fn size_hint() -> usize {
         256
     }

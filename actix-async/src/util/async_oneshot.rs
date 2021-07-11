@@ -17,7 +17,7 @@ use core::{
 use crate::error::ActixAsyncError;
 use crate::util::smart_pointer::RefCounter;
 
-pub fn oneshot<T>() -> (OneshotSender<T>, OneshotReceiver<T>) {
+pub(crate) fn oneshot<T>() -> (OneshotSender<T>, OneshotReceiver<T>) {
     let inner = RefCounter::new(Inner::new());
     let sender = OneshotSender::new(inner.clone());
     let receiver = OneshotReceiver::new(inner);
@@ -38,7 +38,6 @@ const RECV: usize = 0b0010;
 const READY: usize = 0b0001;
 
 impl<T> Inner<T> {
-    #[inline(always)]
     pub(crate) const fn new() -> Self {
         Inner {
             state: AtomicUsize::new(0),
@@ -49,14 +48,12 @@ impl<T> Inner<T> {
     }
 
     // Gets the current state
-    #[inline(always)]
     pub(crate) fn state(&self) -> State {
         State(self.state.load(Ordering::Acquire))
     }
 
     // Gets the receiver's waker. You *must* check the state to ensure
     // it is set. This would be unsafe if it were public.
-    #[inline(always)]
     pub(crate) fn recv(&self) -> &Waker {
         // MUST BE SET
         debug_assert!(self.state().recv());
@@ -64,7 +61,6 @@ impl<T> Inner<T> {
     }
 
     // Sets the receiver's waker.
-    #[inline(always)]
     pub(crate) fn set_recv(&self, waker: Waker) -> State {
         let recv = self.recv.get();
         unsafe { (*recv).as_mut_ptr().write(waker) } // !
@@ -73,20 +69,17 @@ impl<T> Inner<T> {
 
     // Gets the sender's waker. You *must* check the state to ensure
     // it is set. This would be unsafe if it were public.
-    #[inline(always)]
     pub(crate) fn send(&self) -> &Waker {
         debug_assert!(self.state().send());
         unsafe { &*(*self.send.get()).as_ptr() }
     }
 
-    #[inline(always)]
     pub(crate) fn take_value(&self) -> T {
         // MUST BE SET
         debug_assert!(self.state().ready());
         unsafe { (*self.value.get()).as_ptr().read() }
     }
 
-    #[inline(always)]
     pub(crate) fn set_value(&self, value: T) -> State {
         debug_assert!(!self.state().ready());
         let val = self.value.get();
@@ -94,14 +87,12 @@ impl<T> Inner<T> {
         State(self.state.fetch_or(READY, Ordering::AcqRel))
     }
 
-    #[inline(always)]
     pub(crate) fn close(&self) -> State {
         State(self.state.fetch_or(CLOSED, Ordering::AcqRel))
     }
 }
 
 impl<T> Drop for Inner<T> {
-    #[inline(always)]
     fn drop(&mut self) {
         let state = State(*self.state.get_mut());
         // Drop the wakers if they are present
@@ -125,19 +116,15 @@ unsafe impl<T: Sync> Sync for Inner<T> {}
 pub(crate) struct State(usize);
 
 impl State {
-    #[inline(always)]
     pub(crate) fn closed(&self) -> bool {
         (self.0 & CLOSED) == CLOSED
     }
-    #[inline(always)]
     pub(crate) fn ready(&self) -> bool {
         (self.0 & READY) == READY
     }
-    #[inline(always)]
     pub(crate) fn send(&self) -> bool {
         (self.0 & SEND) == SEND
     }
-    #[inline(always)]
     pub(crate) fn recv(&self) -> bool {
         (self.0 & RECV) == RECV
     }
@@ -150,7 +137,6 @@ pub struct OneshotSender<T> {
 }
 
 impl<T> OneshotSender<T> {
-    #[inline(always)]
     pub(crate) fn new(inner: RefCounter<Inner<T>>) -> Self {
         OneshotSender { inner, done: false }
     }
@@ -180,7 +166,6 @@ impl<T> OneshotSender<T> {
 }
 
 impl<T> Drop for OneshotSender<T> {
-    #[inline(always)]
     fn drop(&mut self) {
         if !self.done {
             let state = self.inner.state();
@@ -201,12 +186,10 @@ pub struct OneshotReceiver<T> {
 }
 
 impl<T> OneshotReceiver<T> {
-    #[inline(always)]
     pub(crate) fn new(inner: RefCounter<Inner<T>>) -> Self {
         OneshotReceiver { inner, done: false }
     }
 
-    #[inline(always)]
     fn handle_state(&mut self, state: State) -> Poll<Result<T, ActixAsyncError>> {
         if state.ready() {
             Poll::Ready(Ok(self.inner.take_value()))
@@ -244,7 +227,6 @@ impl<T> Future for OneshotReceiver<T> {
 }
 
 impl<T> Drop for OneshotReceiver<T> {
-    #[inline(always)]
     fn drop(&mut self) {
         if !self.done {
             let state = self.inner.state();

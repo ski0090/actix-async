@@ -91,6 +91,7 @@ impl<A: Actor> Addr<A> {
     /// *. No guarantee timing of message processing. Actor would use it's size_hint to limit
     /// concurrent async work it runs. All additional messages would remain in mailbox until
     /// it has free slot for processing.
+    #[inline]
     pub fn do_send<M>(&self, msg: M)
     where
         M: Message + Send,
@@ -108,6 +109,7 @@ impl<A: Actor> Addr<A> {
     ///
     /// *. No guarantee timing of message processing. Actor can only run one exclusive message at
     /// once. All additional messages would remain in mailbox until it has free slot for processing.
+    #[inline]
     pub fn do_wait<M>(&self, msg: M)
     where
         M: Message + Send,
@@ -174,7 +176,6 @@ impl<A: Actor> Addr<A> {
         }
     }
 
-    #[inline(always)]
     fn _send<M, F>(&self, f: F) -> MessageRequest<A, M::Result>
     where
         A: Handler<M>,
@@ -184,7 +185,6 @@ impl<A: Actor> Addr<A> {
         send(f, |msg| self.deref().send(msg))
     }
 
-    #[inline(always)]
     fn _send_box<M, F>(&self, f: F) -> BoxedMessageRequest<A::Runtime, M::Result>
     where
         A: Handler<M>,
@@ -232,11 +232,11 @@ impl<A: Actor> WeakAddr<A> {
     /// Try to upgrade to a `Addr`
     ///
     /// The upgrade would fail if no `Addr` is alive anywhere.
+    #[inline]
     pub fn upgrade(&self) -> Option<Addr<A>> {
         self.0.upgrade().map(Addr)
     }
 
-    #[inline(always)]
     fn send_weak<M, F>(&self, f: F) -> BoxedMessageRequest<A::Runtime, M::Result>
     where
         A: Handler<M>,
@@ -246,7 +246,6 @@ impl<A: Actor> WeakAddr<A> {
         send(f, |msg| Box::pin(self._send_weak(msg)) as _)
     }
 
-    #[inline(always)]
     async fn _send_weak(&self, msg: ActorMessage<A>) -> Result<(), ActixAsyncError> {
         self.upgrade()
             .ok_or(ActixAsyncError::Closed)?
@@ -277,18 +276,22 @@ where
     A: Actor + Handler<M>,
     M: Message + Send,
 {
+    #[inline]
     fn send(&self, msg: M) -> BoxedMessageRequest<A::Runtime, M::Result> {
         self._send_box(|tx| ActorMessage::new_ref(msg, Some(tx)))
     }
 
+    #[inline]
     fn wait(&self, msg: M) -> BoxedMessageRequest<A::Runtime, M::Result> {
         self._send_box(|tx| ActorMessage::new_mut(msg, Some(tx)))
     }
 
+    #[inline]
     fn do_send(&self, msg: M) {
         Addr::do_send(self, msg);
     }
 
+    #[inline]
     fn do_wait(&self, msg: M) {
         Addr::do_wait(self, msg);
     }
@@ -299,21 +302,25 @@ where
     A: Actor + Handler<M>,
     M: Message + Send,
 {
+    #[inline]
     fn send(&self, msg: M) -> BoxedMessageRequest<A::Runtime, M::Result> {
         self.send_weak(|tx| ActorMessage::new_ref(msg, Some(tx)))
     }
 
+    #[inline]
     fn wait(&self, msg: M) -> BoxedMessageRequest<A::Runtime, M::Result> {
         self.send_weak(|tx| ActorMessage::new_mut(msg, Some(tx)))
     }
 
     /// `AddrHandler::do_send` will panic if the `Addr` for `RecipientWeak` is gone.
+    #[inline]
     fn do_send(&self, msg: M) {
         let addr = &self.upgrade().unwrap();
         Addr::do_send(addr, msg);
     }
 
     /// `AddrHandler::do_wait` will panic if the `Addr` for `RecipientWeak` is gone.
+    #[inline]
     fn do_wait(&self, msg: M) {
         let addr = &self.upgrade().unwrap();
         Addr::do_wait(addr, msg);

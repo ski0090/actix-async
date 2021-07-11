@@ -58,7 +58,7 @@ impl Display for ActixAsyncError {
         match self {
             #[cfg(feature = "tokio-rt")]
             ActixAsyncError::SuperVisor(ref e) => write!(f, "{}", e),
-            this => write!(f, "{}", this),
+            this => write!(f, "{:?}", this),
         }
     }
 }

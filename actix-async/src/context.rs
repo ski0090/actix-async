@@ -32,6 +32,7 @@ pub struct ContextJoinHandle {
 
 impl ContextJoinHandle {
     /// Cancel the task associate to this handle.
+    #[inline]
     pub fn cancel(self) {
         let _ = self.handle.send(());
     }
@@ -40,13 +41,13 @@ impl ContextJoinHandle {
     ///
     /// This happens when the task is finished or the thread task runs on is recovered from a
     /// panic.
+    #[inline]
     pub fn is_terminated(&self) -> bool {
         self.handle.is_closed()
     }
 }
 
 impl<'c, A: Actor> Context<'c, A> {
-    #[inline]
     pub(crate) fn new(inner: &'c ContextInner<A>) -> Self {
         Context { inner }
     }
@@ -175,6 +176,7 @@ impl<'c, A: Actor> Context<'c, A> {
     ///     });
     /// }
     /// ```
+    #[inline]
     pub fn add_stream<S>(&self, stream: S) -> ContextJoinHandle
     where
         S: Stream + 'static,
@@ -187,6 +189,7 @@ impl<'c, A: Actor> Context<'c, A> {
     /// add a stream to context. multiple stream can be added to one context.
     ///
     /// stream item will be treated as exclusive message and `Handler::handle_wait` will be called.
+    #[inline]
     pub fn add_wait_stream<S>(&self, stream: S) -> ContextJoinHandle
     where
         S: Stream + 'static,
