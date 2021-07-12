@@ -4,6 +4,7 @@ use alloc::{collections::VecDeque, task::Wake};
 
 use super::util::smart_pointer::{Lock, RefCounter};
 
+#[derive(Clone)]
 pub(crate) struct ActorWaker {
     queue: WakeQueue,
     idx: usize,
@@ -11,7 +12,6 @@ pub(crate) struct ActorWaker {
 }
 
 impl ActorWaker {
-    #[inline]
     pub(crate) fn new(queued: &WakeQueue, idx: usize, waker: &Waker) -> RefCounter<Self> {
         RefCounter::new(Self {
             queue: WakeQueue::clone(queued),
@@ -23,16 +23,7 @@ impl ActorWaker {
 
 impl Wake for ActorWaker {
     fn wake(self: RefCounter<Self>) {
-        // try to take ownership of actor waker. This would reduce the overhead
-        // of task wake up if waker is not shared between multiple tasks.
-        // (Which is a regular seen use case.)
-        match RefCounter::try_unwrap(self) {
-            Ok(ActorWaker { queue, idx, waker }) => {
-                queue.enqueue(idx);
-                waker.wake();
-            }
-            Err(this) => this.wake_by_ref(),
-        }
+        self.wake_by_ref()
     }
 
     fn wake_by_ref(self: &RefCounter<Self>) {

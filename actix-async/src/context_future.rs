@@ -16,6 +16,7 @@ use super::message::{ActorMessage, FutureMessage, StreamMessage};
 use super::util::{
     channel::Receiver,
     futures::{poll_fn, yield_now, LocalBoxFuture, Stream},
+    smart_pointer::RefCounter,
 };
 use super::waker::{ActorWaker, WakeQueue};
 
@@ -108,12 +109,11 @@ async fn poll_future<A: Actor>(future_cache: &RefCell<Vec<FutureMessage<A>>>) ->
 }
 
 struct TaskRef<'a> {
-    task: Slab<LocalBoxFuture<'a, ()>>,
+    task: Slab<(LocalBoxFuture<'a, ()>, Option<RefCounter<ActorWaker>>)>,
     queue: &'a WakeQueue,
 }
 
 impl<'a> TaskRef<'a> {
-    #[inline(always)]
     fn new<A: Actor>(queue: &'a WakeQueue) -> Self {
         Self {
             task: Slab::with_capacity(A::size_hint()),
@@ -121,18 +121,16 @@ impl<'a> TaskRef<'a> {
         }
     }
 
-    #[inline(always)]
     fn is_empty(&self) -> bool {
         self.task.is_empty()
     }
 
-    #[inline(always)]
     fn len(&self) -> usize {
         self.task.len()
     }
 
     fn add_task(&mut self, task: LocalBoxFuture<'a, ()>) {
-        let idx = self.task.insert(task);
+        let idx = self.task.insert((task, None));
         self.queue.enqueue(idx);
     }
 
@@ -144,9 +142,19 @@ impl<'a> TaskRef<'a> {
             let mut polled = 0;
 
             while let Some(idx) = queue.try_lock().and_then(|mut l| l.pop_front()) {
-                if let Some(task) = task_ref.get_mut(idx) {
+                if let Some((task, waker)) = task_ref.get_mut(idx) {
+                    let waker = match *waker {
+                        Some(ref waker) => waker.clone().into(),
+                        None => {
+                            // construct actor waker from the waker actor received.
+                            let waker_new = ActorWaker::new(queue, idx, cx.waker());
+                            *waker = Some(waker_new);
+
+                            waker.clone().unwrap().into()
+                        }
+                    };
+
                     // construct actor waker from the waker actor received.
-                    let waker = ActorWaker::new(queue, idx, cx.waker()).into();
                     let cx = &mut StdContext::from_waker(&waker);
                     // prepare to remove the resolved tasks.
                     if task.as_mut().poll(cx).is_ready() {
@@ -172,7 +180,6 @@ impl<'a> TaskRef<'a> {
         .await
     }
 
-    #[inline(never)]
     async fn graceful_resolve(&mut self) {
         while !self.is_empty() {
             self.poll_task().await;
@@ -188,23 +195,31 @@ impl<A: Actor> TaskMut<A> {
         Self(None)
     }
 
-    #[inline(always)]
     fn add_task(&mut self, msg: Box<dyn MessageHandler<A> + Send>) {
         self.0 = Some(msg);
     }
 
-    #[inline(always)]
     fn is_empty(&self) -> bool {
         self.0.is_none()
     }
 
-    #[inline(always)]
     fn take(&mut self) -> Option<Box<dyn MessageHandler<A> + Send>> {
         self.0.take()
     }
 }
 
 impl<A: Actor> ContextFuture<A> {
+    /// Expose actor context.
+    ///
+    /// Operation on Context would only happen After `ContextFuture::run` future is polled.
+    #[inline]
+    pub fn ctx(&self) -> Context<'_, A> {
+        self.ctx.as_ref()
+    }
+
+    /// Run context future on current thread.
+    ///
+    /// It would block current async task.
     pub async fn run(mut self) {
         let ContextFuture {
             ctx,

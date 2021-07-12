@@ -156,7 +156,7 @@ pub trait Actor: Sized + 'static {
     ///     
     ///     // await on the fut to get ContextFuture.
     ///     let ctx_fut = fut.await;
-    ///     
+    ///
     ///     // manual spawn ContextFuture to tokio runtime.     
     ///     tokio::task::spawn_local(async move {
     ///         ctx_fut.run().await;
