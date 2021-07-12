@@ -1,9 +1,11 @@
+use core::future::Future;
+
 use alloc::boxed::Box;
 
 use super::actor::Actor;
 use super::context::Context;
 use super::message::{FunctionMessage, FunctionMutMessage, Message, MessageContainer};
-use super::util::futures::LocalBoxFuture;
+use super::util::{channel::OneshotSender, futures::LocalBoxFuture};
 
 /// Trait define how actor handle a message.
 /// # example:
@@ -124,24 +126,9 @@ where
 }
 
 pub trait MessageHandler<A: Actor> {
-    fn handle<'act, 'ctx, 'res>(
-        &mut self,
-        act: &'act A,
-        ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'res, ()>
-    where
-        'act: 'res,
-        'ctx: 'res;
+    fn handle<'f>(&mut self, act: &'f A, ctx: Context<'f, A>) -> LocalBoxFuture<'f, ()>;
 
-    fn handle_wait<'act, 'ctx, 'res>(
-        &mut self,
-        act: &'act mut A,
-        ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'res, ()>
-    where
-        'act: 'res,
-        'ctx: 'res,
-    {
+    fn handle_wait<'f>(&mut self, act: &'f mut A, ctx: Context<'f, A>) -> LocalBoxFuture<'f, ()> {
         self.handle(act, ctx)
     }
 }
@@ -151,59 +138,34 @@ where
     A: Actor + Handler<M>,
     M: Message,
 {
-    fn handle<'act, 'ctx, 'res>(
-        &mut self,
-        act: &'act A,
-        ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'res, ()>
-    where
-        'act: 'res,
-        'ctx: 'res,
-    {
+    fn handle<'f>(&mut self, act: &'f A, ctx: Context<'f, A>) -> LocalBoxFuture<'f, ()> {
         let (msg, tx) = self.take();
-
         let fut = act.handle(msg, ctx);
-
-        Box::pin(async move {
-            match tx {
-                Some(tx) => {
-                    if !tx.is_closed() {
-                        let res = fut.await;
-                        let _ = tx.send(res);
-                    }
-                }
-                None => {
-                    let _ = fut.await;
-                }
-            }
-        })
+        handle(tx, fut)
     }
 
-    fn handle_wait<'act, 'ctx, 'res>(
-        &mut self,
-        act: &'act mut A,
-        ctx: Context<'ctx, A>,
-    ) -> LocalBoxFuture<'res, ()>
-    where
-        'act: 'res,
-        'ctx: 'res,
-    {
+    fn handle_wait<'f>(&mut self, act: &'f mut A, ctx: Context<'f, A>) -> LocalBoxFuture<'f, ()> {
         let (msg, tx) = self.take();
-
         let fut = act.handle_wait(msg, ctx);
+        handle(tx, fut)
+    }
+}
 
-        Box::pin(async move {
-            match tx {
-                Some(tx) => {
-                    if !tx.is_closed() {
-                        let res = fut.await;
-                        let _ = tx.send(res);
-                    }
-                }
-                None => {
-                    let _ = fut.await;
+fn handle<'f, Fut>(tx: Option<OneshotSender<Fut::Output>>, fut: Fut) -> LocalBoxFuture<'f, ()>
+where
+    Fut: Future + 'f,
+{
+    Box::pin(async move {
+        match tx {
+            Some(tx) => {
+                if !tx.is_closed() {
+                    let res = fut.await;
+                    let _ = tx.send(res);
                 }
             }
-        })
-    }
+            None => {
+                let _ = fut.await;
+            }
+        }
+    })
 }

@@ -7,7 +7,7 @@ edition = "2018"
 [features]
 default = ["macros", "tokio-rt"]
 macros = ["actix-async-codegen", "async-trait"]
-tokio-rt = ["std", "tokio/rt", "tokio/sync", "tokio/time"]
+tokio-rt = ["std", "tokio/macros", "tokio/rt", "tokio/sync", "tokio/time"]
 std = []
 
 [[example]]
@@ -20,7 +20,7 @@ path = "./examples/closure.rs"
 
 [dependencies]
 cache-padded = "1.1.1"
-futures-core = { version = "0.3", default-features = false }
+futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 pin-project-lite = "0.2.6"
 slab = { version = "0.4.3", default-features = false }
 

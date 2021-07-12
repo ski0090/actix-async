@@ -96,6 +96,7 @@ impl<T> Sender<T> {
         }
     }
 
+    #[cfg(feature = "std")]
     pub(crate) fn close(&self) -> bool {
         self.channel.close()
     }
@@ -280,6 +281,7 @@ impl<T> Receiver<T> {
         self.channel.close()
     }
 
+    #[cfg(feature = "std")]
     pub(crate) fn is_closed(&self) -> bool {
         self.channel.queue.is_closed()
     }
