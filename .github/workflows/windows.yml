@@ -40,4 +40,4 @@ jobs:
         timeout-minutes: 40
         with:
           command: test
-          args: --all --all-features --no-fail-fast -- --nocapture
+          args: --all --no-fail-fast -- --nocapture
