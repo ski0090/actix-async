@@ -4,19 +4,16 @@ version = "0.1.0"
 authors = ["fakeshadow <24548779@qq.com>"]
 edition = "2018"
 
+[[example]]
+name = "io-uring"
+path = "./examples/io-uring.rs"
+required-features = ["tokio-uring"]
+
 [features]
 default = ["macros", "tokio-rt"]
 macros = ["actix-async-codegen", "async-trait"]
 tokio-rt = ["std", "tokio/macros", "tokio/rt", "tokio/sync", "tokio/time"]
 std = []
-
-[[example]]
-name = "concurrency"
-path = "./examples/concurrency.rs"
-
-[[example]]
-name = "closure"
-path = "./examples/closure.rs"
 
 [dependencies]
 cache-padded = "1.1.1"
@@ -33,6 +30,9 @@ async-trait = { version = "0.1.42", optional = true }
 
 # tokio runtime support
 tokio = { version = "1.8.1", optional = true }
+
+# tokio-uring for example
+tokio-uring = { version = "0.1", optional = true }
 
 [dev-dependencies]
 actix = { version = "0.12", default-features = false }
